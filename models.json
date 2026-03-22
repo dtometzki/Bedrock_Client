@@ -6,5 +6,10 @@
   {
     "id": "global.anthropic.claude-opus-4-6-v1",
     "label": "claude-opus-4-6-v1"
+  },
+  {
+    "id": "minimax.minimax-m2.5",
+    "label": "MiniMax M2.5"
   }
+
 ]
