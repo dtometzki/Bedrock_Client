@@ -1,0 +1,10 @@
+[
+  {
+    "id": "global.anthropic.claude-sonnet-4-6",
+    "label": "claude-sonnet-4-6"
+  },
+  {
+    "id": "global.anthropic.claude-opus-4-6-v1",
+    "label": "claude-opus-4-6-v1"
+  }
+]

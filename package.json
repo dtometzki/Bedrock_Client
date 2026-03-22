@@ -1,0 +1,21 @@
+{
+  "name": "bedrock-client",
+  "version": "1.0.0",
+  "description": "Interactive AWS Bedrock CLI client",
+  "type": "module",
+  "bin": {
+    "bedrock-chat": "./app_aws.js"
+  },
+  "scripts": {
+    "build": "node ./build.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1014.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  }
+}
