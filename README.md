@@ -60,6 +60,33 @@ bedrock-chat
 bedrock-chat -m claude-sonnet-4-6
 ```
 
+## Add A Model
+
+Add new models in [`models.json`](/home/damian/jsexample/client/models.json). Each entry needs an AWS Bedrock model ID in `id`. `label` is optional, but recommended because it is shown in the interactive selection and can also be used with `-m` / `--model`.
+
+Example:
+
+```json
+[
+  {
+    "id": "global.anthropic.claude-sonnet-4-6",
+    "label": "claude-sonnet-4-6"
+  },
+  {
+    "id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "label": "claude-3-7-sonnet"
+  }
+]
+```
+
+Notes:
+
+- `id` must match the exact Bedrock model ID.
+- `label` should be short and readable.
+- If `label` is omitted, the CLI derives one automatically from `id`.
+- After changing [`models.json`](/home/damian/jsexample/client/models.json), restart the client.
+- If you use the built version from `dist/`, run `npm run build` again so the updated `models.json` is copied.
+
 ## Build
 
 ```bash
