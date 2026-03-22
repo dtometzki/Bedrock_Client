@@ -36,7 +36,7 @@ export class SimpleBedrockClient {
 
       if (isAccessDenied) {
         throw new Error(
-          `Keine Bedrock-Berechtigung für Modell ${modelId}. ` +
+          `Das Modell ${modelId} kann mit den aktuellen Bedrock-Berechtigungen nicht verwendet werden. ` +
           "Erforderlich ist mindestens `bedrock:InvokeModelWithResponseStream` bzw. `bedrock:ConverseStream`."
         );
       }
