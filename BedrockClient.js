@@ -16,6 +16,35 @@ export class SimpleBedrockClient {
     this.messages =[];
   }
 
+  async verifyAccess(modelId = this.modelId) {
+    const command = new ConverseStreamCommand({
+      modelId,
+      messages: [{ role: "user", content: [{ text: "ping" }] }],
+      inferenceConfig: { maxTokens: 1, temperature: 0 }
+    });
+
+    try {
+      const response = await this.client.send(command);
+
+      for await (const _event of response.stream) {
+        break;
+      }
+    } catch (error) {
+      const isAccessDenied =
+        error?.name === "AccessDeniedException" ||
+        error?.$metadata?.httpStatusCode === 403;
+
+      if (isAccessDenied) {
+        throw new Error(
+          `Keine Bedrock-Berechtigung für Modell ${modelId}. ` +
+          "Erforderlich ist mindestens `bedrock:InvokeModelWithResponseStream` bzw. `bedrock:ConverseStream`."
+        );
+      }
+
+      throw error;
+    }
+  }
+
   async *askStream(prompt, systemPrompt = null) {
     this.messages.push({ role: "user", content:[{ text: prompt }] });
 
