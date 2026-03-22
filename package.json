@@ -7,7 +7,8 @@
     "bedrock-chat": "./app_aws.js"
   },
   "scripts": {
-    "build": "node ./build.mjs"
+    "build": "node ./build.mjs",
+    "clean": "node ./clean.mjs"
   },
   "engines": {
     "node": ">=20"
