@@ -147,7 +147,7 @@ async function main() {
       console.log("\nChat beendet.");
       return;
     }
-    console.error(err?.message ?? "Ein unerwarteter Fehler ist aufgetreten.", err);
+    console.error(err?.message ?? "Ein unerwarteter Fehler ist aufgetreten.");
   } finally {
     rl?.close();
   }
