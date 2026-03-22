@@ -8,7 +8,9 @@
   },
   "scripts": {
     "build": "node ./build.mjs",
-    "clean": "node ./clean.mjs"
+    "clean": "node ./clean.mjs",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
   "engines": {
     "node": ">=20"
@@ -17,6 +19,11 @@
     "@aws-sdk/client-bedrock-runtime": "^3.1014.0"
   },
   "devDependencies": {
-    "esbuild": "^0.25.12"
+    "@eslint/js": "^10.0.1",
+    "esbuild": "^0.25.12",
+    "eslint": "^10.1.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "prettier": "^3.8.1"
   }
 }
