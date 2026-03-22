@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import path from "node:path";
 import { SimpleBedrockClient } from "./BedrockClient.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -14,6 +15,12 @@ import { loadLastModelId, saveLastModelId, loadChatHistory, saveChatHistory } fr
 import { handleCommand } from "./lib/commands.js";
 
 async function main() {
+  const scriptName = process.argv[1] ? path.basename(process.argv[1]) : "";
+  if (scriptName !== "bedrock-chat") {
+    console.error("Fehler: Diese Anwendung kann nur über den Befehl 'bedrock-chat' gestartet werden.");
+    process.exit(1);
+  }
+
   let rl;
 
   try {
