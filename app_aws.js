@@ -53,6 +53,7 @@ async function main() {
       }
     }
 
+    await ai.verifyAccess();
     await saveLastModelId(ai.modelId);
     
     const activeModel = models.find((model) => model.id === ai.modelId);
@@ -96,9 +97,14 @@ async function main() {
           "Wähle ein Modell"
         );
         if (selectedModel) {
-          ai.setModelId(selectedModel.id);
-          await saveLastModelId(selectedModel.id);
-          console.log(`\n[System: Modell gewechselt zu ${selectedModel.label}]\n`);
+          try {
+            await ai.verifyAccess(selectedModel.id);
+            ai.setModelId(selectedModel.id);
+            await saveLastModelId(selectedModel.id);
+            console.log(`\n[System: Modell gewechselt zu ${selectedModel.label}]\n`);
+          } catch (error) {
+            console.log(`\n[System: Modellwechsel fehlgeschlagen: ${error.message}]\n`);
+          }
         } else {
           console.log("\n[System: Modellwechsel abgebrochen.]\n");
         }
@@ -108,9 +114,14 @@ async function main() {
       if (inputTrimmed.startsWith("/model ")) {
         const newChoice = parseInt(inputTrimmed.split(" ")[1], 10) - 1;
         if (newChoice >= 0 && newChoice < models.length) {
-          ai.setModelId(models[newChoice].id);
-          await saveLastModelId(models[newChoice].id);
-          console.log(`\n[System: Modell gewechselt zu ${models[newChoice].label}]\n`);
+          try {
+            await ai.verifyAccess(models[newChoice].id);
+            ai.setModelId(models[newChoice].id);
+            await saveLastModelId(models[newChoice].id);
+            console.log(`\n[System: Modell gewechselt zu ${models[newChoice].label}]\n`);
+          } catch (error) {
+            console.log(`\n[System: Modellwechsel fehlgeschlagen: ${error.message}]\n`);
+          }
         } else {
           console.log("\n[System: Ungültige Modellnummer.]\n");
         }
@@ -136,7 +147,7 @@ async function main() {
       console.log("\nChat beendet.");
       return;
     }
-    console.error("Ein unerwarteter Fehler ist aufgetreten.", err);
+    console.error(err?.message ?? "Ein unerwarteter Fehler ist aufgetreten.", err);
   } finally {
     rl?.close();
   }

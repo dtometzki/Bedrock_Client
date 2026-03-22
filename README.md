@@ -14,6 +14,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Lets you choose and switch models interactively
 - Stores the last selected model for the next start
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
+- Verifies Bedrock access for the selected model before the chat starts
 - Supports standalone CLI usage through `bedrock-chat`
 
 ## AWS Setup
