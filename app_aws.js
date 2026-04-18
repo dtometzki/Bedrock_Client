@@ -16,8 +16,10 @@ import { handleCommand } from "./lib/commands.js";
 
 async function main() {
   const scriptName = process.argv[1] ? path.basename(process.argv[1]) : "";
-  if (scriptName !== "bedrock-chat") {
-    console.error("Fehler: Diese Anwendung kann nur über den Befehl 'bedrock-chat' gestartet werden.");
+  if (scriptName !== "bedrock-chat" && scriptName !== "app_aws.js") {
+    console.error(
+      "Fehler: Diese Anwendung kann nur über 'bedrock-chat' oder direkt mit 'node app_aws.js' gestartet werden."
+    );
     process.exit(1);
   }
 
@@ -77,9 +79,14 @@ async function main() {
       console.log(`[System: Chat-Historie mit ${ai.messages.length} Nachrichten geladen.]`);
     }
     if (cliArgs.system) {
-      console.log(`[System: System Prompt aktiviert: "${cliArgs.system.substring(0, 30)}..."]`);
+      const previewLimit = 30;
+      const promptPreview =
+        cliArgs.system.length > previewLimit
+          ? `${cliArgs.system.slice(0, previewLimit)}...`
+          : cliArgs.system;
+      console.log(`[System: System Prompt aktiviert: "${promptPreview}"]`);
     }
-    console.log("Chat gestartet. Befehle: '/exit', '/clear', '/model', '/export'.\n");
+    console.log("Chat gestartet. Befehle: '/help', '/exit', '/clear', '/model', '/export'.\n");
     console.log("-".repeat(40));
 
     // 2. Chat-Schleife
@@ -106,7 +113,7 @@ async function main() {
 
         // Save chat history after successful generation
         await saveChatHistory(ai.messages);
-      } catch (e) {
+      } catch {
         // Fehler-Handling ist im BedrockClient oder wird ignoriert (nach Logging)
       }
 
