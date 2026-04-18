@@ -13,6 +13,12 @@ export class SimpleBedrockClient {
     this.client = new BedrockRuntimeClient({ region });
     this.modelId = modelId;
     this.messages = [];
+    this.tokenUsageTotals = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    };
+    this.lastTokenUsage = null;
   }
 
   /**
@@ -45,7 +51,8 @@ export class SimpleBedrockClient {
     try {
       const response = await this.client.send(command);
 
-      for await (const _event of response.stream) {
+      for await (const event of response.stream) {
+        void event;
         break;
       }
     } catch (error) {
@@ -101,15 +108,30 @@ export class SimpleBedrockClient {
         const response = await this.client.send(command);
 
         let fullResponse = "";
+        let requestTokenUsage = null;
         for await (const event of response.stream) {
           if (event.contentBlockDelta?.delta?.text) {
             const chunk = event.contentBlockDelta.delta.text;
             fullResponse += chunk;
             yield chunk;
           }
+
+          if (event.metadata?.usage) {
+            requestTokenUsage = {
+              inputTokens: event.metadata.usage.inputTokens ?? 0,
+              outputTokens: event.metadata.usage.outputTokens ?? 0,
+              totalTokens: event.metadata.usage.totalTokens ?? 0
+            };
+          }
         }
 
         this.messages.push({ role: "assistant", content: [{ text: fullResponse }] });
+        if (requestTokenUsage) {
+          this.lastTokenUsage = requestTokenUsage;
+          this.tokenUsageTotals.inputTokens += requestTokenUsage.inputTokens;
+          this.tokenUsageTotals.outputTokens += requestTokenUsage.outputTokens;
+          this.tokenUsageTotals.totalTokens += requestTokenUsage.totalTokens;
+        }
         return; // Success, exit loop
       } catch (error) {
         const isThrottling =
