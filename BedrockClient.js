@@ -45,7 +45,8 @@ export class SimpleBedrockClient {
     try {
       const response = await this.client.send(command);
 
-      for await (const _event of response.stream) {
+      for await (const event of response.stream) {
+        void event;
         break;
       }
     } catch (error) {
