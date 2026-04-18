@@ -2,8 +2,6 @@
 
 import path from "node:path";
 import { SimpleBedrockClient } from "./BedrockClient.js";
-import * as readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
 import { printAwsCliStatus, verifyAwsCliConnection } from "./lib/awsCliCheck.js";
 import { printLogo } from "./lib/branding.js";
 import { parseCliArgs, printHelp } from "./lib/cli.js";
@@ -22,8 +20,6 @@ async function main() {
     );
     process.exit(1);
   }
-
-  let rl;
 
   try {
     const models = await loadModels(new URL("./models.json", import.meta.url));
@@ -57,13 +53,12 @@ async function main() {
     }
 
     const awsIdentity = await verifyAwsCliConnection();
-    rl = readline.createInterface({ input, output });
     printLogo();
     printAwsCliStatus(awsIdentity);
 
     // 1. Modell-Auswahl beim Start
     if (!startupModel && !savedModel) {
-      const selectedModel = await promptForModelSelection(rl, models, ai.modelId);
+      const selectedModel = await promptForModelSelection(models, ai.modelId);
       if (selectedModel) {
         ai.setModelId(selectedModel.id);
         await saveLastModelId(selectedModel.id);
@@ -93,13 +88,13 @@ async function main() {
 
     // 2. Chat-Schleife
     while (true) {
-      const frage = await askStyledQuestion(rl, ">");
+      const frage = await askStyledQuestion(">");
       let inputTrimmed = frage.trim().toLowerCase();
 
       if (!inputTrimmed) continue;
 
       if (inputTrimmed.startsWith("/") || inputTrimmed === "/") {
-        const exitChat = await handleCommand(inputTrimmed, { rl, ai, models });
+        const exitChat = await handleCommand(inputTrimmed, { ai, models });
         if (exitChat) break;
         continue;
       }
@@ -127,8 +122,6 @@ async function main() {
       return;
     }
     console.error(err?.message ?? "Ein unerwarteter Fehler ist aufgetreten.");
-  } finally {
-    rl?.close();
   }
 }
 
