@@ -86,7 +86,9 @@ async function main() {
           : cliArgs.system;
       console.log(`[System: System Prompt aktiviert: "${promptPreview}"]`);
     }
-    console.log("Chat gestartet. Befehle: '/help', '/exit', '/clear', '/model', '/export'.\n");
+    console.log(
+      "Chat gestartet. Befehle: '/help', '/models', '/stats', '/exit', '/clear', '/model', '/export'.\n"
+    );
     console.log("-".repeat(40));
 
     // 2. Chat-Schleife
