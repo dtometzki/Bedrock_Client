@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import * as readline from "node:readline/promises";
@@ -83,8 +83,9 @@ function isExpiredAwsSession(errorText) {
 }
 
 function awsLoginCommand() {
-  const profile = process.env.AWS_PROFILE;
-  return profile ? `aws login --profile ${profile}` : "aws login";
+  const profile = getActiveAwsProfile();
+  const loginProfile = getAwsConfigValue("source_profile", profile) || profile;
+  return loginProfile === "default" ? "aws login" : `aws login --profile ${loginProfile}`;
 }
 
 function formatAwsIdentity(identity) {
@@ -125,9 +126,13 @@ function loadAwsIdentity() {
   }
 }
 
-function getAwsConfigValue(key) {
+function getAwsConfigValue(key, profile = null) {
   try {
-    return execSync(`aws configure get ${key}`, {
+    const args = ["configure", "get", key];
+    if (profile) {
+      args.push("--profile", profile);
+    }
+    return execFileSync("aws", args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"]
     }).trim();

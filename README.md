@@ -27,6 +27,12 @@ aws configure
 aws sts get-caller-identity
 ```
 
+If your `default` profile assumes a role, sign in through the source profile instead:
+
+```bash
+aws login --profile Admins
+```
+
 ## Install
 
 Clone the repository and install dependencies:
