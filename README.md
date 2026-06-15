@@ -1,4 +1,4 @@
-# Bedrock Client
+# Bedrock Client by Damian Tometzki
 
 Interactive CLI client for AWS Bedrock with model selection, command menu, formatted terminal output and startup checks for AWS CLI connectivity.
 
