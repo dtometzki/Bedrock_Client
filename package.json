@@ -8,12 +8,13 @@
   },
   "files": [
     "app_aws.js",
+    "src",
     "models.json",
     "README.md",
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check app_aws.js",
+    "check": "node --check app_aws.js && node --check src/*.js",
     "test": "npm run check"
   },
   "engines": {
