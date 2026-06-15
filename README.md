@@ -14,7 +14,8 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Lets you choose and switch models interactively
 - Stores the last selected model for the next start
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
-- Verifies Bedrock access for the selected model before the chat starts
+- Calls Bedrock through the official AWS SDK for JavaScript
+- Supports AWS profile selection at startup and during the running chat
 - Supports standalone CLI usage through `bedrock-chat`
 
 ## AWS Setup
@@ -42,6 +43,12 @@ npm link
 
 ## Run
 
+Show the installed version:
+
+```bash
+node app_aws.js --version
+```
+
 Start directly with Node.js:
 
 ```bash
@@ -52,6 +59,19 @@ Start with a predefined model:
 
 ```bash
 node app_aws.js -m claude-sonnet-4-6
+```
+
+Start with a predefined AWS profile:
+
+```bash
+node app_aws.js -p bedrok
+node app_aws.js --profile Admins
+```
+
+List available AWS profiles:
+
+```bash
+node app_aws.js -p -list
 ```
 
 If linked with `npm link`, start it as a CLI:
@@ -86,24 +106,24 @@ Notes:
 - `label` should be short and readable.
 - If `label` is omitted, the CLI derives one automatically from `id`.
 - After changing [`models.json`](/home/damian/jsexample/client/models.json), restart the client.
-- If you use the built version from `dist/`, run `npm run build` again so the updated `models.json` is copied.
 
-## Build
-
-```bash
-npm run build
-./dist/bedrock-chat
-```
-
-## Clean
+## Check
 
 ```bash
-npm run clean
+npm test
 ```
+
+The test suite uses a fake local `aws` executable, so the CLI smoke tests do not call your real AWS account.
+
+## Release Notes
+
+See [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Commands
 
 - `/` opens the command selection menu
+- `/profile` lists AWS profiles
+- `/profile <profile>` switches the active AWS profile for the running chat
 - `/model` opens the model selection menu
 - `/clear` clears chat history
 - `/exit` exits the client

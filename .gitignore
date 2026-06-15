@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .DS_Store
+.last_model
+.codex
+test-argv.js
+firebase-debug.log
+npm-debug.log*
