@@ -1,14 +1,29 @@
 [
   {
     "id": "global.anthropic.claude-sonnet-4-6",
-    "label": "claude-sonnet-4-6"
+    "label": "claude-sonnet-4-6",
+    "pricingUsdPer1M": {
+      "input": 3,
+      "output": 15,
+      "source": "Anthropic/Amazon Bedrock on-demand text token pricing"
+    }
   },
   {
     "id": "global.anthropic.claude-opus-4-6-v1",
-    "label": "claude-opus-4-6-v1"
+    "label": "claude-opus-4-6-v1",
+    "pricingUsdPer1M": {
+      "input": 5,
+      "output": 25,
+      "source": "Anthropic/Amazon Bedrock on-demand text token pricing"
+    }
   },
   {
     "id": "minimax.minimax-m2.5",
-    "label": "MiniMax M2.5"
+    "label": "MiniMax M2.5",
+    "pricingUsdPer1M": {
+      "input": 0.36,
+      "output": 1.44,
+      "source": "Amazon Bedrock on-demand pricing for Europe Frankfurt"
+    }
   }
 ]

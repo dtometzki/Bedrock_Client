@@ -13,6 +13,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Starts an interactive Bedrock chat in the terminal
 - Lets you choose and switch models interactively
 - Stores the last selected model for the next start
+- Shows current Amazon Bedrock billing costs and session token usage with `/usage`
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
 - Calls Bedrock through the official AWS SDK for JavaScript
 - Supports AWS profile selection at startup and during the running chat
@@ -110,6 +111,7 @@ Notes:
 
 - `id` must match the exact Bedrock model ID.
 - `label` should be short and readable.
+- `pricingUsdPer1M` is optional and powers the `/usage` cost estimate.
 - If `label` is omitted, the CLI derives one automatically from `id`.
 - After changing [`models.json`](/home/damian/jsexample/client/models.json), restart the client.
 
@@ -128,8 +130,12 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 ## Commands
 
 - `/` opens the command selection menu
+- `Tab` autocompletes slash commands while typing
+- `Up`/`Down` selects slash commands from the command menu
+- `/help` opens the command selection menu
 - `/profile` lists AWS profiles
 - `/profile <profile>` switches the active AWS profile for the running chat
 - `/model` opens the model selection menu
+- `/usage` shows current Amazon Bedrock billing costs from AWS Cost Explorer plus current session token usage
 - `/clear` clears chat history
 - `/exit` exits the client
