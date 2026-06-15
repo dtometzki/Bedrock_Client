@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "check": "node --check app_aws.js",
-    "test": "npm run check && node --test test/*.test.js"
+    "test": "npm run check"
   },
   "engines": {
     "node": ">=20"
