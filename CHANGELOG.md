@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-06-17
 
 - Add arrow-key selection for the slash command menu.
 - Add `Tab` completion and highlighted command suggestions while typing slash commands.
