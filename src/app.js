@@ -1,7 +1,14 @@
-import fs from "node:fs";
 import { ANSI, formatInteger, formatUsd, getPackageVersion, printStartupBanner, terminalLine } from "./ui.js";
 import { SLASH_COMMANDS, printSlashCommands } from "./slash-commands.js";
 import { parseCliArgs } from "./cli-args.js";
+import {
+  readLastModelId,
+  readSavedInferenceOverrides,
+  writeLastModelId,
+  writeSavedInferenceOverrides
+} from "./config.js";
+import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
+import { loadModels, resolveStartupModel } from "./models.js";
 import {
   formatProfileList,
   listAwsProfiles,
@@ -9,21 +16,28 @@ import {
   printAwsProfiles,
   switchAwsProfile
 } from "./aws-context.js";
-import { createBedrockClient, streamConverse } from "./bedrock.js";
+import { buildInferenceConfig, createBedrockClient, streamConverse } from "./bedrock.js";
 import { promptForModelSelection, readPrompt } from "./prompt.js";
 import { formatLine, resetResponseFormatting } from "./response-format.js";
 import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
 
+function printHistorySummary(messages, maxTurns) {
+  console.log(`${ANSI.green}Verlauf:${ANSI.reset} ${countHistoryTurns(messages)} Turns, ${messages.length} Nachrichten`);
+  console.log(`${ANSI.green}Limit:${ANSI.reset} ${formatHistoryLimit(maxTurns)}`);
+  console.log(terminalLine());
+}
+
 export async function main() {
   try {
-    const modelsPath = new URL("../models.json", import.meta.url);
-    const models = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
     const cliArgs = parseCliArgs();
 
     if (cliArgs.version) {
       console.log(`bedrock-chat ${getPackageVersion()}`);
       return;
     }
+
+    const modelsPath = new URL("../models.json", import.meta.url);
+    const models = loadModels(modelsPath);
 
     if (cliArgs.help) {
       console.log(`${ANSI.bold}Verwendung:${ANSI.reset} bedrock-chat [Optionen]\n`);
@@ -32,6 +46,9 @@ export async function main() {
       console.log("  -p, --profile <name> AWS Profil beim Start setzen");
       console.log("  -p -list           AWS Profile anzeigen und beenden");
       console.log("  -s, --system <text> System Prompt setzen");
+      console.log("  --max-tokens <n>    Max. Antwort-Tokens setzen");
+      console.log("  --temperature <n>   Temperatur setzen (0 bis 1)");
+      console.log("  --max-turns <n>     Verlauf auf n Chat-Turns begrenzen, 0 = unbegrenzt");
       console.log("  -v, --version      Version anzeigen");
       console.log("  -h, --help          Hilfe anzeigen\n");
       console.log("Commands:");
@@ -50,22 +67,12 @@ export async function main() {
       return;
     }
 
-    if (cliArgs.profile) {
-      switchAwsProfile(cliArgs.profile);
-    }
-
-    let { creds, identityLabel } = loadAwsContext();
-    let bedrockClient = createBedrockClient(creds);
-    const lastModelPath = new URL("../.last_model", import.meta.url);
-    let lastModelId = "";
-    try {
-      if (fs.existsSync(lastModelPath)) {
-        lastModelId = fs.readFileSync(lastModelPath, "utf8").trim();
-      }
-    } catch {}
-
-    const defaultModel = models.find(m => m.id === lastModelId) ?? models[0];
-    const activeModel = models.find(m => m.id === cliArgs.model || m.label === cliArgs.model) ?? defaultModel;
+    const legacyLastModelPath = new URL("../.last_model", import.meta.url);
+    const lastModelId = readLastModelId(legacyLastModelPath);
+    const activeModel = resolveStartupModel(models, {
+      requestedModel: cliArgs.model,
+      lastModelId
+    });
     let modelId = activeModel.id;
 
     if (!cliArgs.model && !lastModelId && models.length > 1) {
@@ -73,13 +80,27 @@ export async function main() {
       if (selected) {
         modelId = selected.id;
         try {
-          fs.writeFileSync(lastModelPath, modelId, "utf8");
+          writeLastModelId(modelId);
         } catch {}
       }
     }
 
-    let currentModel = models.find(m => m.id === modelId) ?? activeModel;
-    printStartupBanner({ model: currentModel, region: creds.region, identityLabel });
+    let currentModel = models.find((m) => m.id === modelId) ?? activeModel;
+    const savedInferenceOverrides = readSavedInferenceOverrides();
+    const activeInferenceOverrides = {
+      ...savedInferenceOverrides,
+      ...cliArgs.inferenceOverrides
+    };
+    if (Object.keys(cliArgs.inferenceOverrides).length) {
+      try {
+        writeSavedInferenceOverrides(activeInferenceOverrides);
+      } catch {}
+    }
+    let inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
+    const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
+    let { creds, identityLabel } = startupContext;
+    let bedrockClient = createBedrockClient(creds);
+    printStartupBanner({ model: currentModel, region: creds.region, identityLabel, inferenceConfig });
 
     let messages = [];
     const usageTotals = emptyUsageTotals();
@@ -103,6 +124,10 @@ export async function main() {
       }
       if (input === "/usage") {
         printUsageSummary(usageTotals);
+        continue;
+      }
+      if (input === "/history") {
+        printHistorySummary(messages, cliArgs.maxTurns);
         continue;
       }
       if (input === "/profile" || input.startsWith("/profile ")) {
@@ -138,8 +163,9 @@ export async function main() {
         if (selected) {
           modelId = selected.id;
           currentModel = selected;
+          inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
           try {
-            fs.writeFileSync(lastModelPath, modelId, "utf8");
+            writeLastModelId(modelId);
           } catch {}
           console.log(`${ANSI.green}Modell:${ANSI.reset} ${currentModel.label || modelId}`);
           console.log(terminalLine());
@@ -153,7 +179,8 @@ export async function main() {
         continue;
       }
 
-      messages.push({ role: "user", content: [{ text: input }] });
+      const userMessage = { role: "user", content: [{ text: input }] };
+      const requestMessages = [...messages, userMessage];
       process.stdout.write("\n");
 
       try {
@@ -164,8 +191,9 @@ export async function main() {
 
         for await (const event of streamConverse(bedrockClient, {
           modelId,
-          messages,
-          system: cliArgs.system
+          messages: requestMessages,
+          system: cliArgs.system,
+          inferenceConfig
         })) {
           if (event.type === "usage") {
             usageRecord = addUsageRecord(usageTotals, {
@@ -199,13 +227,15 @@ export async function main() {
           }
         }
 
-        messages.push({ role: "assistant", content: [{ text: fullResponse }] });
+        messages = trimMessagesToMaxTurns([
+          ...requestMessages,
+          { role: "assistant", content: [{ text: fullResponse }] }
+        ], cliArgs.maxTurns);
         if (usageRecord) {
           console.log("");
           console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
         }
       } catch (err) {
-        messages.pop();
         console.error(`\n${ANSI.yellow}API Fehler: ${err.message}${ANSI.reset}`);
         if (err.message.includes("bedrock:InvokeModelWithResponseStream")) {
           console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
@@ -218,5 +248,6 @@ export async function main() {
     console.log(`\n${ANSI.gray}Chat beendet.${ANSI.reset}`);
   } catch (err) {
     console.error(`\nFehler: ${err.message}`);
+    process.exitCode = 1;
   }
 }

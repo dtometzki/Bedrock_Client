@@ -1,5 +1,10 @@
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
 
+export const DEFAULT_INFERENCE_CONFIG = {
+  maxTokens: 2000,
+  temperature: 0.7
+};
+
 export function createBedrockClient(creds) {
   return new BedrockRuntimeClient({
     region: creds.region,
@@ -11,16 +16,43 @@ export function createBedrockClient(creds) {
   });
 }
 
-export async function* streamConverse(client, { modelId, messages, system }) {
+export function buildInferenceConfig(model, overrides = {}) {
+  return {
+    ...DEFAULT_INFERENCE_CONFIG,
+    ...(model?.inferenceConfig || {}),
+    ...(model?.maxTokens != null && { maxTokens: model.maxTokens }),
+    ...(model?.temperature != null && { temperature: model.temperature }),
+    ...(overrides.maxTokens != null && { maxTokens: overrides.maxTokens }),
+    ...(overrides.temperature != null && { temperature: overrides.temperature })
+  };
+}
+
+function getStreamException(event) {
+  const entry = Object.entries(event)
+    .find(([key, value]) => key.endsWith("Exception") && value);
+
+  if (!entry) return null;
+
+  const [name, details] = entry;
+  const message = details.message || details.Message || JSON.stringify(details);
+  return new Error(`${name}: ${message}`);
+}
+
+export async function* streamConverse(client, { modelId, messages, system, inferenceConfig = DEFAULT_INFERENCE_CONFIG }) {
   const command = new ConverseStreamCommand({
     modelId,
     messages,
-    inferenceConfig: { maxTokens: 2000, temperature: 0.7 },
+    inferenceConfig,
     ...(system && { system: [{ text: system }] })
   });
   const response = await client.send(command);
 
   for await (const event of response.stream ?? []) {
+    const streamException = getStreamException(event);
+    if (streamException) {
+      throw streamException;
+    }
+
     const text = event.contentBlockDelta?.delta?.text;
     if (text) {
       yield { type: "text", text };
