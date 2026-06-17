@@ -43,10 +43,26 @@ export function formatHomePath(path) {
   return path;
 }
 
-export function printStartupBanner({ model, region, identityLabel }) {
+export function formatInferenceConfig(inferenceConfig = {}) {
+  const parts = [];
+
+  if (inferenceConfig.maxTokens != null) {
+    parts.push(`Max Tokens: ${formatInteger(inferenceConfig.maxTokens)}`);
+  }
+  if (inferenceConfig.temperature != null) {
+    parts.push(`Temperatur: ${Number(inferenceConfig.temperature).toLocaleString("de-DE", {
+      maximumFractionDigits: 3
+    })}`);
+  }
+
+  return parts.join(" | ");
+}
+
+export function printStartupBanner({ model, region, identityLabel, inferenceConfig }) {
   const width = terminalWidth();
   const profile = process.env.AWS_PROFILE || "default";
   const modelLabel = model.label || model.id;
+  const inferenceLabel = formatInferenceConfig(inferenceConfig);
 
   console.log("");
   console.log(`${ANSI.bold}${centerText(`AWS Bedrock CLI ${getPackageVersion()}`, width)}${ANSI.reset}`);
@@ -55,6 +71,9 @@ export function printStartupBanner({ model, region, identityLabel }) {
   }
   console.log(centerText(`${profile} (${region})`, width));
   console.log(centerText(modelLabel, width));
+  if (inferenceLabel) {
+    console.log(centerText(inferenceLabel, width));
+  }
   console.log(centerText(formatHomePath(process.cwd()), width));
   console.log("");
   console.log(terminalLine());

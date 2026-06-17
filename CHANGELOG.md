@@ -5,6 +5,15 @@
 - Add arrow-key selection for the slash command menu.
 - Add `Tab` completion and highlighted command suggestions while typing slash commands.
 - Add `/usage` for session token usage and estimated Bedrock costs.
+- Add strict CLI argument parsing and validation for unknown or missing options.
+- Add configurable `--max-tokens`, `--temperature` and `--max-turns` options.
+- Add per-model `inferenceConfig` support in `models.json`.
+- Add `/history` and automatic retained-history trimming.
+- Show active max token and temperature settings in the startup banner.
+- Persist `--max-tokens` and `--temperature` overrides across restarts.
+- Move last-model persistence to the user config directory.
+- Surface Bedrock stream exception events as API errors.
+- Add unit tests for CLI parsing, model resolution, history trimming, config storage and Bedrock streaming.
 - Split the CLI implementation into focused modules under `src/`.
 
 ## 1.2.0 - 2026-06-14

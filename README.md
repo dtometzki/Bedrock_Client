@@ -14,9 +14,11 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Lets you choose and switch models interactively
 - Stores the last selected model for the next start
 - Shows current Amazon Bedrock billing costs and session token usage with `/usage`
+- Limits retained chat history by default to keep context size predictable
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
 - Calls Bedrock through the official AWS SDK for JavaScript
 - Supports AWS profile selection at startup and during the running chat
+- Supports configurable `maxTokens`, `temperature` and history size
 - Supports standalone CLI usage through `bedrock-chat`
 
 ## AWS Setup
@@ -81,6 +83,19 @@ List available AWS profiles:
 node app_aws.js -p -list
 ```
 
+Set Bedrock inference parameters:
+
+```bash
+node app_aws.js --max-tokens 4096 --temperature 0.3
+```
+
+Keep more or less local chat history:
+
+```bash
+node app_aws.js --max-turns 50
+node app_aws.js --max-turns 0
+```
+
 If linked with `npm link`, start it as a CLI:
 
 ```bash
@@ -90,7 +105,7 @@ bedrock-chat -m claude-sonnet-4-6
 
 ## Add A Model
 
-Add new models in [`models.json`](/home/damian/jsexample/client/models.json). Each entry needs an AWS Bedrock model ID in `id`. `label` is optional, but recommended because it is shown in the interactive selection and can also be used with `-m` / `--model`.
+Add new models in [`models.json`](./models.json). Each entry needs an AWS Bedrock model ID in `id`. `label` is optional, but recommended because it is shown in the interactive selection and can also be used with `-m` / `--model`.
 
 Example:
 
@@ -102,7 +117,11 @@ Example:
   },
   {
     "id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "label": "claude-3-7-sonnet"
+    "label": "claude-3-7-sonnet",
+    "inferenceConfig": {
+      "maxTokens": 4096,
+      "temperature": 0.4
+    }
   }
 ]
 ```
@@ -112,8 +131,12 @@ Notes:
 - `id` must match the exact Bedrock model ID.
 - `label` should be short and readable.
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate.
+- `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - If `label` is omitted, the CLI derives one automatically from `id`.
-- After changing [`models.json`](/home/damian/jsexample/client/models.json), restart the client.
+- After changing [`models.json`](./models.json), restart the client.
+
+The last selected model is stored outside the repository in the user config directory. Set `BEDROCK_CHAT_CONFIG_DIR` if you want to override that location.
+CLI overrides for `--max-tokens` and `--temperature` are stored there too and reused on the next start.
 
 ## Check
 
@@ -121,7 +144,7 @@ Notes:
 npm test
 ```
 
-The test suite uses a fake local `aws` executable, so the CLI smoke tests do not call your real AWS account.
+The test suite runs syntax checks and unit tests. It does not call your real AWS account.
 
 ## Release Notes
 
@@ -137,5 +160,6 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 - `/profile <profile>` switches the active AWS profile for the running chat
 - `/model` opens the model selection menu
 - `/usage` shows current Amazon Bedrock billing costs from AWS Cost Explorer plus current session token usage
+- `/history` shows the retained chat history and configured limit
 - `/clear` clears chat history
 - `/exit` exits the client

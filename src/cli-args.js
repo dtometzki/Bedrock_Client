@@ -1,13 +1,98 @@
-export function parseCliArgs() {
-  const args = process.argv.slice(2);
-  const parsedArgs = { help: false, version: false, model: null, profile: null, system: "Du bist ein hilfreicher KI-Assistent." };
+import { parseArgs } from "node:util";
+
+export const DEFAULT_SYSTEM_PROMPT = "Du bist ein hilfreicher KI-Assistent.";
+export const DEFAULT_MAX_TOKENS = 2000;
+export const DEFAULT_TEMPERATURE = 0.7;
+export const DEFAULT_MAX_HISTORY_TURNS = 20;
+
+function normalizeArgs(args) {
+  const normalized = [];
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "-h" || args[i] === "--help") parsedArgs.help = true;
-    else if (args[i] === "-v" || args[i] === "--version") parsedArgs.version = true;
-    else if (args[i] === "-m" || args[i] === "--model") parsedArgs.model = args[++i] || null;
-    else if (args[i] === "-p" || args[i] === "--profile") parsedArgs.profile = args[++i] || null;
-    else if (args[i] === "-s" || args[i] === "--system") parsedArgs.system = args[++i] || null;
+    const current = args[i];
+    const next = args[i + 1];
+
+    if ((current === "-p" || current === "--profile") && ["-list", "--list", "list"].includes(next)) {
+      normalized.push("--profile=list");
+      i += 1;
+      continue;
+    }
+
+    normalized.push(current);
   }
-  return parsedArgs;
+
+  return normalized;
+}
+
+function parseNumberOption(name, value, { min = -Infinity, max = Infinity, integer = false } = {}) {
+  if (value == null) return null;
+
+  const numberValue = Number(value);
+  const invalidNumber = !Number.isFinite(numberValue);
+  const invalidInteger = integer && !Number.isInteger(numberValue);
+  const outOfRange = numberValue < min || numberValue > max;
+
+  if (invalidNumber || invalidInteger || outOfRange) {
+    const rangeLabel = Number.isFinite(min) && Number.isFinite(max)
+      ? ` zwischen ${min} und ${max}`
+      : Number.isFinite(min)
+        ? ` >= ${min}`
+        : "";
+    throw new Error(`Ungueltiger Wert fuer --${name}: ${value}${rangeLabel}`);
+  }
+
+  return numberValue;
+}
+
+export function parseCliArgs(argv = process.argv.slice(2)) {
+  let parsed;
+
+  try {
+    parsed = parseArgs({
+      args: normalizeArgs(argv),
+      allowPositionals: false,
+      options: {
+        help: { type: "boolean", short: "h" },
+        version: { type: "boolean", short: "v" },
+        model: { type: "string", short: "m" },
+        profile: { type: "string", short: "p" },
+        system: { type: "string", short: "s" },
+        "max-tokens": { type: "string" },
+        temperature: { type: "string" },
+        "max-turns": { type: "string" }
+      }
+    });
+  } catch (err) {
+    throw new Error(`Ungueltige Argumente: ${err.message}`);
+  }
+
+  const values = parsed.values;
+  const maxTokens = parseNumberOption("max-tokens", values["max-tokens"], {
+    min: 1,
+    integer: true
+  }) ?? DEFAULT_MAX_TOKENS;
+  const temperature = parseNumberOption("temperature", values.temperature, {
+    min: 0,
+    max: 1
+  }) ?? DEFAULT_TEMPERATURE;
+  const maxTurns = parseNumberOption("max-turns", values["max-turns"], {
+    min: 0,
+    integer: true
+  }) ?? DEFAULT_MAX_HISTORY_TURNS;
+  const inferenceOverrides = {
+    ...(values["max-tokens"] != null && { maxTokens }),
+    ...(values.temperature != null && { temperature })
+  };
+
+  return {
+    help: Boolean(values.help),
+    version: Boolean(values.version),
+    model: values.model ?? null,
+    profile: values.profile ?? null,
+    system: values.system ?? DEFAULT_SYSTEM_PROMPT,
+    maxTokens,
+    temperature,
+    maxTurns,
+    inferenceOverrides
+  };
 }

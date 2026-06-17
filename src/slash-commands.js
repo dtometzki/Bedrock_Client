@@ -7,6 +7,7 @@ export const SLASH_COMMANDS = [
   { name: "/profile <name>", completion: "/profile", description: "AWS Profil wechseln" },
   { name: "/model", description: "Modell wechseln" },
   { name: "/usage", description: "AWS Billing und Session-Nutzung anzeigen" },
+  { name: "/history", description: "Chat-Verlauf und Limit anzeigen" },
   { name: "/clear", description: "Verlauf leeren" },
   { name: "/exit", description: "Beenden" }
 ];
