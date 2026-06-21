@@ -132,6 +132,7 @@ Notes:
 - `label` should be short and readable.
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
+- `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.
 - If `label` is omitted, the CLI derives one automatically from `id`.
 - After changing [`models.json`](./models.json), restart the client.
 

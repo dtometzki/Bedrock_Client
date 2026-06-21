@@ -18,6 +18,16 @@
     }
   },
   {
+    "id": "global.anthropic.claude-opus-4-8",
+    "label": "claude-opus-4-8",
+    "disabledInferenceConfigFields": ["temperature"],
+    "pricingUsdPer1M": {
+      "input": 5,
+      "output": 25,
+      "source": "Anthropic/Amazon Bedrock on-demand text token pricing"
+    }
+  },
+  {
     "id": "minimax.minimax-m2.5",
     "label": "MiniMax M2.5",
     "pricingUsdPer1M": {

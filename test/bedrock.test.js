@@ -23,6 +23,17 @@ test("buildInferenceConfig merges defaults, model config and CLI overrides", () 
   });
 });
 
+test("buildInferenceConfig omits disabled model fields after CLI overrides", () => {
+  assert.deepEqual(buildInferenceConfig({
+    inferenceConfig: { maxTokens: 100, temperature: 0.4 },
+    disabledInferenceConfigFields: ["temperature"]
+  }, {
+    temperature: 0.2
+  }), {
+    maxTokens: 100
+  });
+});
+
 test("streamConverse yields text and usage events", async () => {
   let sentCommand;
   const client = {
