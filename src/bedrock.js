@@ -17,7 +17,7 @@ export function createBedrockClient(creds) {
 }
 
 export function buildInferenceConfig(model, overrides = {}) {
-  return {
+  const config = {
     ...DEFAULT_INFERENCE_CONFIG,
     ...(model?.inferenceConfig || {}),
     ...(model?.maxTokens != null && { maxTokens: model.maxTokens }),
@@ -25,6 +25,12 @@ export function buildInferenceConfig(model, overrides = {}) {
     ...(overrides.maxTokens != null && { maxTokens: overrides.maxTokens }),
     ...(overrides.temperature != null && { temperature: overrides.temperature })
   };
+
+  for (const field of model?.disabledInferenceConfigFields || []) {
+    delete config[field];
+  }
+
+  return config;
 }
 
 function getStreamException(event) {
