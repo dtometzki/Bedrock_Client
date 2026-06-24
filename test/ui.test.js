@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatInferenceConfig } from "../src/ui.js";
+import { ANSI, formatAccountSummary, formatInferenceConfig } from "../src/ui.js";
 
 test("formatInferenceConfig shows max tokens and temperature", () => {
   assert.equal(formatInferenceConfig({
@@ -12,4 +12,15 @@ test("formatInferenceConfig shows max tokens and temperature", () => {
 test("formatInferenceConfig omits missing values", () => {
   assert.equal(formatInferenceConfig({ maxTokens: 2000 }), "Max Tokens: 2.000");
   assert.equal(formatInferenceConfig(), "");
+});
+
+test("formatAccountSummary shows identity and active profile region", () => {
+  assert.deepEqual(formatAccountSummary({
+    profile: "default",
+    region: "eu-central-1",
+    identityLabel: "Damian (Admins, 841986542603)"
+  }), [
+    `${ANSI.green}Account:${ANSI.reset} Damian (Admins, 841986542603)`,
+    `${ANSI.green}AWS Profil:${ANSI.reset} default (eu-central-1)`
+  ]);
 });

@@ -58,18 +58,26 @@ export function formatInferenceConfig(inferenceConfig = {}) {
   return parts.join(" | ");
 }
 
-export function printStartupBanner({ model, region, identityLabel, inferenceConfig }) {
+export function formatAccountSummary({ profile = "default", region = "us-east-1", identityLabel = "" } = {}) {
+  const lines = [];
+
+  if (identityLabel) {
+    lines.push(`${ANSI.green}Account:${ANSI.reset} ${identityLabel}`);
+  } else {
+    lines.push(`${ANSI.green}Account:${ANSI.reset} Nicht verfuegbar`);
+  }
+  lines.push(`${ANSI.green}AWS Profil:${ANSI.reset} ${profile} (${region})`);
+
+  return lines;
+}
+
+export function printStartupBanner({ model, inferenceConfig }) {
   const width = terminalWidth();
-  const profile = process.env.AWS_PROFILE || "default";
   const modelLabel = model.label || model.id;
   const inferenceLabel = formatInferenceConfig(inferenceConfig);
 
   console.log("");
   console.log(`${ANSI.bold}${centerText(`AWS Bedrock CLI ${getPackageVersion()}`, width)}${ANSI.reset}`);
-  if (identityLabel) {
-    console.log(centerText(identityLabel, width));
-  }
-  console.log(centerText(`${profile} (${region})`, width));
   console.log(centerText(modelLabel, width));
   if (inferenceLabel) {
     console.log(centerText(inferenceLabel, width));

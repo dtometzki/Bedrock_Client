@@ -3,6 +3,7 @@ import { ANSI, terminalLine } from "./ui.js";
 export const SLASH_COMMANDS = [
   { name: "/", description: "Befehlsliste anzeigen" },
   { name: "/help", description: "Befehlsliste anzeigen" },
+  { name: "/account", description: "AWS Account und Region anzeigen" },
   { name: "/profile", description: "AWS Profile anzeigen" },
   { name: "/profile <name>", completion: "/profile", description: "AWS Profil wechseln" },
   { name: "/model", description: "Modell wechseln" },

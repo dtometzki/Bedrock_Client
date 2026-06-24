@@ -1,4 +1,12 @@
-import { ANSI, formatInteger, formatUsd, getPackageVersion, printStartupBanner, terminalLine } from "./ui.js";
+import {
+  ANSI,
+  formatAccountSummary,
+  formatInteger,
+  formatUsd,
+  getPackageVersion,
+  printStartupBanner,
+  terminalLine
+} from "./ui.js";
 import { SLASH_COMMANDS, printSlashCommands } from "./slash-commands.js";
 import { parseCliArgs } from "./cli-args.js";
 import {
@@ -100,7 +108,7 @@ export async function main() {
     const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
     let { creds, identityLabel } = startupContext;
     let bedrockClient = createBedrockClient(creds);
-    printStartupBanner({ model: currentModel, region: creds.region, identityLabel, inferenceConfig });
+    printStartupBanner({ model: currentModel, inferenceConfig });
 
     let messages = [];
     const usageTotals = emptyUsageTotals();
@@ -128,6 +136,15 @@ export async function main() {
       }
       if (input === "/history") {
         printHistorySummary(messages, cliArgs.maxTurns);
+        continue;
+      }
+      if (input === "/account") {
+        console.log(formatAccountSummary({
+          profile: process.env.AWS_PROFILE || "default",
+          region: creds.region,
+          identityLabel
+        }).join("\n"));
+        console.log(terminalLine());
         continue;
       }
       if (input === "/profile" || input.startsWith("/profile ")) {
