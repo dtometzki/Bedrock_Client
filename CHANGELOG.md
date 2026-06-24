@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 - 2026-06-24
+
+- Add arrow-key navigation to the `/model` selection menu.
+- Add `profileArn`, `aliases` and `disabled` support for `models.json` entries.
+- Add the `eu.anthropic.claude-fable-5` Bedrock inference profile as a disabled model entry.
+- Use configured inference profile ARNs for Bedrock Converse calls while keeping model labels and IDs for selection.
+- Add tests for model profile ARN resolution, disabled models and model selection rendering.
+
 ## 1.3.0 - 2026-06-17
 
 - Add arrow-key selection for the slash command menu.
