@@ -11,6 +11,10 @@ export function normalizeModel(model, index = 0) {
   };
 }
 
+export function getModelInvocationId(model) {
+  return model?.profileArn || model?.inferenceProfileArn || model?.id;
+}
+
 export function loadModels(modelsPath) {
   let parsed;
 
@@ -24,12 +28,26 @@ export function loadModels(modelsPath) {
     throw new Error("models.json muss mindestens ein Modell enthalten.");
   }
 
-  return parsed.map(normalizeModel);
+  const models = parsed
+    .map(normalizeModel)
+    .filter((model) => !model.disabled);
+
+  if (models.length === 0) {
+    throw new Error("models.json muss mindestens ein aktiviertes Modell enthalten.");
+  }
+
+  return models;
 }
 
 export function findModel(models, requestedModel) {
   if (!requestedModel) return null;
-  return models.find((model) => model.id === requestedModel || model.label === requestedModel) ?? null;
+  return models.find((model) => (
+    model.id === requestedModel ||
+    model.label === requestedModel ||
+    model.profileArn === requestedModel ||
+    model.inferenceProfileArn === requestedModel ||
+    model.aliases?.includes(requestedModel)
+  )) ?? null;
 }
 
 export function formatModelChoices(models) {

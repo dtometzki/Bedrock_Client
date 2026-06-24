@@ -10,21 +10,138 @@ import {
   isCompleteSlashCommand
 } from "./slash-commands.js";
 
-export async function promptForModelSelection(models, currentModelId) {
+function isCurrentModel(model, currentModelId) {
+  return model.id === currentModelId ||
+    model.profileArn === currentModelId ||
+    model.inferenceProfileArn === currentModelId ||
+    model.aliases?.includes(currentModelId);
+}
+
+function getInitialModelSelectionIndex(models, currentModelId) {
+  const index = models.findIndex((model) => isCurrentModel(model, currentModelId));
+  return index >= 0 ? index : 0;
+}
+
+export function formatModelSelectionLines(models, currentModelId, selectedIndex = -1) {
+  const lines = [terminalLine(), `${ANSI.bold}Modelle${ANSI.reset}`];
+
+  models.forEach((model, index) => {
+    const marker = index === selectedIndex ? ">" : " ";
+    const number = `[${index + 1}]`;
+    const active = isCurrentModel(model, currentModelId) ? " (aktiv)" : "";
+    const line = `${marker} ${number} ${model.label}${active}`;
+
+    if (index === selectedIndex) {
+      lines.push(`${ANSI.inverse}${line}${ANSI.reset}`);
+      return;
+    }
+
+    lines.push(`${marker} ${ANSI.gray}${number}${ANSI.reset} ${model.label}${active}`);
+  });
+
+  lines.push(`${ANSI.gray}Pfeile waehlen, Enter uebernimmt.${ANSI.reset}`);
+  lines.push(terminalLine());
+  return lines;
+}
+
+async function promptForModelSelectionByNumber(models, currentModelId) {
   const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
   console.log("");
-  console.log(terminalLine());
-  console.log(`${ANSI.bold}Modelle${ANSI.reset}`);
-  models.forEach((m, i) => {
-    const active = m.id === currentModelId ? ` ${ANSI.gray}(aktiv)${ANSI.reset}` : "";
-    console.log(`${ANSI.gray}[${i + 1}]${ANSI.reset} ${m.label}${active}`);
-  });
-  console.log(terminalLine());
+  console.log(formatModelSelectionLines(models, currentModelId).join("\n"));
 
   const choice = await rl.question(`${ANSI.bold}>${ANSI.reset} `);
   rl.close();
   const index = parseInt(choice.trim(), 10) - 1;
   return (index >= 0 && index < models.length) ? models[index] : null;
+}
+
+export async function promptForModelSelection(models, currentModelId) {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
+    return await promptForModelSelectionByNumber(models, currentModelId);
+  }
+
+  readline.emitKeypressEvents(process.stdin);
+  const wasRaw = process.stdin.isRaw;
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+
+  return await new Promise((resolve) => {
+    let selectedIndex = getInitialModelSelectionIndex(models, currentModelId);
+    let renderedLineCount = 0;
+    let done = false;
+
+    process.stdout.write("\n");
+
+    function render() {
+      if (renderedLineCount) {
+        process.stdout.write(`\u001b[${renderedLineCount}A`);
+        process.stdout.write("\r\u001b[0J");
+      }
+
+      const lines = formatModelSelectionLines(models, currentModelId, selectedIndex);
+      process.stdout.write(`${lines.join("\n")}\n`);
+      renderedLineCount = lines.length;
+    }
+
+    function cleanup(value) {
+      if (done) return;
+      done = true;
+      process.stdin.off("keypress", onKeypress);
+      if (!wasRaw) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
+      resolve(value);
+    }
+
+    function moveSelection(delta) {
+      selectedIndex = (selectedIndex + delta + models.length) % models.length;
+      render();
+    }
+
+    function onKeypress(str, key = {}) {
+      if (key.ctrl && key.name === "c") {
+        cleanup(null);
+        return;
+      }
+      if (key.name === "escape") {
+        cleanup(null);
+        return;
+      }
+      if (key.name === "return" || key.name === "enter") {
+        cleanup(models[selectedIndex]);
+        return;
+      }
+      if (key.name === "up") {
+        moveSelection(-1);
+        return;
+      }
+      if (key.name === "down" || key.name === "tab") {
+        moveSelection(1);
+        return;
+      }
+      if (key.name === "home") {
+        selectedIndex = 0;
+        render();
+        return;
+      }
+      if (key.name === "end") {
+        selectedIndex = models.length - 1;
+        render();
+        return;
+      }
+      if (/^[1-9]$/.test(str || "")) {
+        const index = Number(str) - 1;
+        if (index < models.length) {
+          selectedIndex = index;
+          render();
+        }
+      }
+    }
+
+    process.stdin.on("keypress", onKeypress);
+    render();
+  });
 }
 
 function longestCommonPrefix(values) {

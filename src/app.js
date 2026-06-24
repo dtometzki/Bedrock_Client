@@ -16,7 +16,7 @@ import {
   writeSavedInferenceOverrides
 } from "./config.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
-import { loadModels, resolveStartupModel } from "./models.js";
+import { getModelInvocationId, loadModels, resolveStartupModel } from "./models.js";
 import {
   formatProfileList,
   listAwsProfiles,
@@ -207,7 +207,7 @@ export async function main() {
         let usageRecord = null;
 
         for await (const event of streamConverse(bedrockClient, {
-          modelId,
+          modelId: getModelInvocationId(currentModel),
           messages: requestMessages,
           system: cliArgs.system,
           inferenceConfig
