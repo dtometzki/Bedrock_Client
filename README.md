@@ -123,6 +123,13 @@ Example:
       "maxTokens": 4096,
       "temperature": 0.4
     }
+  },
+  {
+    "id": "eu.anthropic.claude-fable-5",
+    "label": "claude-fable-5",
+    "disabled": true,
+    "aliases": ["global.anthropic.claude-fable-5"],
+    "profileArn": "arn:aws:bedrock:eu-central-1:841986542603:inference-profile/eu.anthropic.claude-fable-5"
   }
 ]
 ```
@@ -131,6 +138,9 @@ Notes:
 
 - `id` must match the exact Bedrock model ID.
 - `label` should be short and readable.
+- `disabled` is optional. Set it to `true` to keep a model configured but hide it from selection.
+- `aliases` is optional and lets old saved IDs or alternative names resolve to the same model.
+- `profileArn` is optional. If set, the client sends that ARN to Bedrock while keeping `id` and `label` for selection.
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.

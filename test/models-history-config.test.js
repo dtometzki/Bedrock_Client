@@ -12,7 +12,7 @@ import {
   writeSavedInferenceOverrides
 } from "../src/config.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "../src/history.js";
-import { findModel, normalizeModel, resolveStartupModel } from "../src/models.js";
+import { findModel, getModelInvocationId, loadModels, normalizeModel, resolveStartupModel } from "../src/models.js";
 
 function message(role, text) {
   return { role, content: [{ text }] };
@@ -30,6 +30,29 @@ test("models are normalized and resolved strictly", () => {
   assert.equal(resolveStartupModel(models, { requestedModel: "Beta" }).id, "model-b");
   assert.throws(() => resolveStartupModel(models, { requestedModel: "missing" }), /Modell nicht gefunden/);
   assert.throws(() => normalizeModel({}, 1), /id fehlt/);
+});
+
+test("profile ARN can be used as Bedrock invocation id", () => {
+  const model = normalizeModel({
+    id: "global.model-a",
+    label: "Model A",
+    aliases: ["old-model-a"],
+    profileArn: "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/global.model-a"
+  });
+
+  assert.equal(getModelInvocationId(model), model.profileArn);
+  assert.equal(findModel([model], model.profileArn).id, "global.model-a");
+  assert.equal(resolveStartupModel([model], { lastModelId: "old-model-a" }).id, "global.model-a");
+});
+
+test("disabled models are not loaded", () => {
+  const modelsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-chat-models-")), "models.json");
+  fs.writeFileSync(modelsPath, JSON.stringify([
+    { id: "model-a" },
+    { id: "model-b", disabled: true }
+  ]), "utf8");
+
+  assert.deepEqual(loadModels(modelsPath).map((model) => model.id), ["model-a"]);
 });
 
 test("history is trimmed by completed chat turns", () => {
