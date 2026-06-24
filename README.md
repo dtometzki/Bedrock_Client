@@ -11,7 +11,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 ## What It Does
 
 - Starts an interactive Bedrock chat in the terminal
-- Lets you choose and switch models interactively
+- Lets you choose and switch models interactively, including arrow-key navigation in `/model`
 - Stores the last selected model for the next start
 - Shows the active AWS account and region with `/account`
 - Shows current Amazon Bedrock billing costs and session token usage with `/usage`
@@ -171,7 +171,7 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 - `/account` shows the active AWS account and region
 - `/profile` lists AWS profiles
 - `/profile <profile>` switches the active AWS profile for the running chat
-- `/model` opens the model selection menu
+- `/model` opens the model selection menu; use `Up`/`Down` and `Enter` to switch
 - `/usage` shows current Amazon Bedrock billing costs from AWS Cost Explorer plus current session token usage
 - `/history` shows the retained chat history and configured limit
 - `/clear` clears chat history
