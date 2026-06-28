@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.1 - 2026-06-28
+
+- Enable the `eu.anthropic.claude-fable-5` Bedrock inference profile while omitting unsupported `temperature` inference config.
+- Add `--debug`, `BEDROCK_CHAT_DEBUG=1` and `/debug` for Bedrock request and error diagnostics.
+- Preserve and display detailed Bedrock error metadata, including error type, fault, HTTP status, request ID and original stream error details.
+- Document Fable 5 model configuration and debug-mode usage.
+
 ## 1.4.0 - 2026-06-24
 
 - Add arrow-key navigation to the `/model` selection menu.
