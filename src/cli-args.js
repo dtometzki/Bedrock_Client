@@ -59,7 +59,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
         system: { type: "string", short: "s" },
         "max-tokens": { type: "string" },
         temperature: { type: "string" },
-        "max-turns": { type: "string" }
+        "max-turns": { type: "string" },
+        debug: { type: "boolean" }
       }
     });
   } catch (err) {
@@ -93,6 +94,7 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     maxTokens,
     temperature,
     maxTurns,
+    debug: Boolean(values.debug),
     inferenceOverrides
   };
 }

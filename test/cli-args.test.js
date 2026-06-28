@@ -18,6 +18,7 @@ test("parseCliArgs returns defaults", () => {
     maxTokens: DEFAULT_MAX_TOKENS,
     temperature: DEFAULT_TEMPERATURE,
     maxTurns: DEFAULT_MAX_HISTORY_TURNS,
+    debug: false,
     inferenceOverrides: {}
   });
 });
@@ -35,7 +36,8 @@ test("parseCliArgs parses supported options", () => {
     "--temperature",
     "0.2",
     "--max-turns",
-    "5"
+    "5",
+    "--debug"
   ]), {
     help: false,
     version: false,
@@ -45,6 +47,7 @@ test("parseCliArgs parses supported options", () => {
     maxTokens: 512,
     temperature: 0.2,
     maxTurns: 5,
+    debug: true,
     inferenceOverrides: {
       maxTokens: 512,
       temperature: 0.2
