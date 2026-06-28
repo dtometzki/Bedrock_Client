@@ -1,6 +1,6 @@
 {
   "name": "bedrock-client",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Interactive AWS Bedrock CLI client (Native ESM)",
   "type": "module",
   "bin": {
