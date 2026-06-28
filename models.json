@@ -30,7 +30,7 @@
   {
     "id": "eu.anthropic.claude-fable-5",
     "label": "claude-fable-5",
-    "disabled": true,
+    "disabledInferenceConfigFields": ["temperature"],
     "aliases": [
       "global.anthropic.claude-fable-5",
       "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/global.anthropic.claude-fable-5"

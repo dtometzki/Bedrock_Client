@@ -20,6 +20,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Calls Bedrock through the official AWS SDK for JavaScript
 - Supports AWS profile selection at startup and during the running chat
 - Supports configurable `maxTokens`, `temperature` and history size
+- Supports a debug mode for Bedrock request and error diagnostics
 - Supports standalone CLI usage through `bedrock-chat`
 
 ## AWS Setup
@@ -97,6 +98,13 @@ node app_aws.js --max-turns 50
 node app_aws.js --max-turns 0
 ```
 
+Enable Bedrock request and error diagnostics:
+
+```bash
+node app_aws.js --debug
+BEDROCK_CHAT_DEBUG=1 node app_aws.js
+```
+
 If linked with `npm link`, start it as a CLI:
 
 ```bash
@@ -127,7 +135,7 @@ Example:
   {
     "id": "eu.anthropic.claude-fable-5",
     "label": "claude-fable-5",
-    "disabled": true,
+    "disabledInferenceConfigFields": ["temperature"],
     "aliases": ["global.anthropic.claude-fable-5"],
     "profileArn": "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-fable-5"
   }
@@ -172,6 +180,7 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 - `/profile` lists AWS profiles
 - `/profile <profile>` switches the active AWS profile for the running chat
 - `/model` opens the model selection menu; use `Up`/`Down` and `Enter` to switch
+- `/debug` toggles request and error diagnostics; `/debug on` and `/debug off` set it explicitly
 - `/usage` shows current Amazon Bedrock billing costs from AWS Cost Explorer plus current session token usage
 - `/history` shows the retained chat history and configured limit
 - `/clear` clears chat history

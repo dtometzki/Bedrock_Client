@@ -24,7 +24,13 @@ import {
   printAwsProfiles,
   switchAwsProfile
 } from "./aws-context.js";
-import { buildInferenceConfig, createBedrockClient, streamConverse } from "./bedrock.js";
+import {
+  buildInferenceConfig,
+  createBedrockClient,
+  formatBedrockErrorDiagnostics,
+  formatBedrockErrorMessage,
+  streamConverse
+} from "./bedrock.js";
 import { promptForModelSelection, readPrompt } from "./prompt.js";
 import { formatLine, resetResponseFormatting } from "./response-format.js";
 import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
@@ -33,6 +39,54 @@ function printHistorySummary(messages, maxTurns) {
   console.log(`${ANSI.green}Verlauf:${ANSI.reset} ${countHistoryTurns(messages)} Turns, ${messages.length} Nachrichten`);
   console.log(`${ANSI.green}Limit:${ANSI.reset} ${formatHistoryLimit(maxTurns)}`);
   console.log(terminalLine());
+}
+
+function isDebugEnvEnabled(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
+
+function parseDebugCommand(input, currentDebugMode) {
+  const value = input.slice("/debug".length).trim().toLowerCase();
+  if (!value) return !currentDebugMode;
+  if (["1", "an", "ein", "on", "true", "yes"].includes(value)) return true;
+  if (["0", "aus", "off", "false", "no"].includes(value)) return false;
+  if (["status", "state"].includes(value)) return currentDebugMode;
+  return null;
+}
+
+function printDebugStatus(debugMode) {
+  console.log(`${ANSI.green}Debug:${ANSI.reset} ${debugMode ? "ein" : "aus"}`);
+  console.log(terminalLine());
+}
+
+function formatDebugRequestLines({
+  model,
+  modelId,
+  region,
+  profile,
+  inferenceConfig,
+  historyMessages,
+  requestMessages,
+  system,
+  maxTurns
+}) {
+  return [
+    `Modell: ${model.label || model.id} (${model.id})`,
+    ...(modelId !== model.id ? [`Bedrock modelId: ${modelId}`] : []),
+    `AWS Profil: ${profile}`,
+    `Region: ${region}`,
+    `Inference Config: ${JSON.stringify(inferenceConfig)}`,
+    `System Prompt: ${system ? `gesetzt (${system.length} Zeichen)` : "nicht gesetzt"}`,
+    `Nachrichten: ${requestMessages.length} gesendet, ${historyMessages.length} im Verlauf`,
+    `Verlauf-Limit: ${formatHistoryLimit(maxTurns)}`
+  ];
+}
+
+function printDebugLines(title, lines) {
+  console.error(`${ANSI.magenta}${title}${ANSI.reset}`);
+  lines.forEach((line) => {
+    console.error(`${ANSI.magenta}  ${line}${ANSI.reset}`);
+  });
 }
 
 export async function main() {
@@ -57,6 +111,7 @@ export async function main() {
       console.log("  --max-tokens <n>    Max. Antwort-Tokens setzen");
       console.log("  --temperature <n>   Temperatur setzen (0 bis 1)");
       console.log("  --max-turns <n>     Verlauf auf n Chat-Turns begrenzen, 0 = unbegrenzt");
+      console.log("  --debug             Debug-Ausgabe fuer Bedrock Requests aktivieren");
       console.log("  -v, --version      Version anzeigen");
       console.log("  -h, --help          Hilfe anzeigen\n");
       console.log("Commands:");
@@ -108,7 +163,11 @@ export async function main() {
     const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
     let { creds, identityLabel } = startupContext;
     let bedrockClient = createBedrockClient(creds);
+    let debugMode = cliArgs.debug || isDebugEnvEnabled(process.env.BEDROCK_CHAT_DEBUG);
     printStartupBanner({ model: currentModel, inferenceConfig });
+    if (debugMode) {
+      printDebugStatus(debugMode);
+    }
 
     let messages = [];
     const usageTotals = emptyUsageTotals();
@@ -128,6 +187,18 @@ export async function main() {
         messages = [];
         console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
         console.log(terminalLine());
+        continue;
+      }
+      if (input === "/debug" || input.startsWith("/debug ")) {
+        const nextDebugMode = parseDebugCommand(input, debugMode);
+        if (nextDebugMode === null) {
+          console.log(`${ANSI.yellow}Ungueltiger Debug-Wert:${ANSI.reset} ${input.slice("/debug".length).trim()}`);
+          console.log(`${ANSI.gray}Nutze /debug, /debug on oder /debug off.${ANSI.reset}`);
+          console.log(terminalLine());
+          continue;
+        }
+        debugMode = nextDebugMode;
+        printDebugStatus(debugMode);
         continue;
       }
       if (input === "/usage") {
@@ -200,14 +271,30 @@ export async function main() {
       const requestMessages = [...messages, userMessage];
       process.stdout.write("\n");
 
+      const bedrockModelId = getModelInvocationId(currentModel);
+
       try {
+        if (debugMode) {
+          printDebugLines("Debug Request", formatDebugRequestLines({
+            model: currentModel,
+            modelId: bedrockModelId,
+            region: creds.region,
+            profile: process.env.AWS_PROFILE || "default",
+            inferenceConfig,
+            historyMessages: messages,
+            requestMessages,
+            system: cliArgs.system,
+            maxTurns: cliArgs.maxTurns
+          }));
+        }
+
         resetResponseFormatting();
         let fullResponse = "";
         let lineBuffer = "";
         let usageRecord = null;
 
         for await (const event of streamConverse(bedrockClient, {
-          modelId: getModelInvocationId(currentModel),
+          modelId: bedrockModelId,
           messages: requestMessages,
           system: cliArgs.system,
           inferenceConfig
@@ -253,8 +340,18 @@ export async function main() {
           console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
         }
       } catch (err) {
-        console.error(`\n${ANSI.yellow}API Fehler: ${err.message}${ANSI.reset}`);
-        if (err.message.includes("bedrock:InvokeModelWithResponseStream")) {
+        console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(err)}${ANSI.reset}`);
+        if (debugMode) {
+          printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(err, {
+            model: currentModel,
+            modelId: bedrockModelId,
+            region: creds.region,
+            inferenceConfig
+          }));
+        } else {
+          console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
+        }
+        if ((err.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
           console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
         }
       }
