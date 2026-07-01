@@ -2,6 +2,14 @@ import { execFileSync } from "node:child_process";
 import { awsLoginCommand, getCommandErrorText, isExpiredAwsSession } from "./aws-context.js";
 import { ANSI, formatInteger, formatLatency, formatUsd, terminalLine } from "./ui.js";
 
+// Eingebaute Fallback-Preise (USD pro 1 Mio. Tokens) fuer die Session-Kostenschaetzung.
+// Diese Tabelle veraltet, sobald AWS/Anthropic ihre Preise aendern. Bevorzugt wird
+// immer `pricingUsdPer1M` aus models.json; nur ohne diese Angabe greift die Tabelle.
+// Modelle ohne Treffer zeigen "n/a" statt einer geschaetzten Kostenangabe.
+//
+// Stand: 2026-06 (Amazon Bedrock On-Demand, Text-Tokens).
+// Quelle: https://aws.amazon.com/bedrock/pricing/
+export const DEFAULT_MODEL_PRICING_UPDATED = "2026-06";
 const DEFAULT_MODEL_PRICING_USD_PER_1M = [
   { pattern: /anthropic\.claude-sonnet-4/i, input: 3, output: 15 },
   { pattern: /anthropic\.claude-opus-4-[5-9]|anthropic\.claude-opus-4\.[5-9]/i, input: 5, output: 25 },
@@ -27,7 +35,7 @@ export function getModelPricing(model) {
   return {
     input: fallback.input,
     output: fallback.output,
-    source: "integrierte Preistabelle"
+    source: `integrierte Preistabelle (Stand ${DEFAULT_MODEL_PRICING_UPDATED})`
   };
 }
 

@@ -67,6 +67,10 @@ export function normalizeInferenceOverrides(value) {
     overrides.temperature = value.temperature;
   }
 
+  if (Number.isFinite(value?.topP) && value.topP >= 0 && value.topP <= 1) {
+    overrides.topP = value.topP;
+  }
+
   return overrides;
 }
 

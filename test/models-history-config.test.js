@@ -100,13 +100,15 @@ test("inference overrides are persisted in settings", () => {
     writeSavedInferenceOverrides({
       maxTokens: 4096,
       temperature: 0.25,
+      topP: 0.9,
       ignored: true
     });
 
     assert.equal(getSettingsPath(), path.join(configDir, "settings.json"));
     assert.deepEqual(readSavedInferenceOverrides(), {
       maxTokens: 4096,
-      temperature: 0.25
+      temperature: 0.25,
+      topP: 0.9
     });
   } finally {
     if (previousConfigDir == null) {

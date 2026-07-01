@@ -8,13 +8,14 @@ import {
   terminalLine
 } from "./ui.js";
 import { SLASH_COMMANDS, printSlashCommands } from "./slash-commands.js";
-import { parseCliArgs } from "./cli-args.js";
+import { parseCliArgs, DEFAULT_SYSTEM_PROMPT } from "./cli-args.js";
 import {
   readLastModelId,
   readSavedInferenceOverrides,
   writeLastModelId,
   writeSavedInferenceOverrides
 } from "./config.js";
+import { clearSession, readSession, writeSession } from "./session.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
 import { getModelInvocationId, loadModels, resolveStartupModel } from "./models.js";
 import {
@@ -29,15 +30,25 @@ import {
   createBedrockClient,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
-  streamConverse
+  isAbortError,
+  streamConverseWithRetry
 } from "./bedrock.js";
-import { promptForModelSelection, readPrompt } from "./prompt.js";
+import { createStreamInterruptController, promptForModelSelection, readPrompt } from "./prompt.js";
 import { formatLine, resetResponseFormatting } from "./response-format.js";
 import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
 
 function printHistorySummary(messages, maxTurns) {
   console.log(`${ANSI.green}Verlauf:${ANSI.reset} ${countHistoryTurns(messages)} Turns, ${messages.length} Nachrichten`);
   console.log(`${ANSI.green}Limit:${ANSI.reset} ${formatHistoryLimit(maxTurns)}`);
+  console.log(terminalLine());
+}
+
+function printSystemStatus(systemPrompt) {
+  if (systemPrompt) {
+    console.log(`${ANSI.green}System Prompt:${ANSI.reset} ${systemPrompt}`);
+  } else {
+    console.log(`${ANSI.green}System Prompt:${ANSI.reset} ${ANSI.gray}nicht gesetzt${ANSI.reset}`);
+  }
   console.log(terminalLine());
 }
 
@@ -108,9 +119,14 @@ export async function main() {
       console.log("  -p, --profile <name> AWS Profil beim Start setzen");
       console.log("  -p -list           AWS Profile anzeigen und beenden");
       console.log("  -s, --system <text> System Prompt setzen");
+      console.log("  --system-file <pfad> System Prompt aus Datei laden");
       console.log("  --max-tokens <n>    Max. Antwort-Tokens setzen");
       console.log("  --temperature <n>   Temperatur setzen (0 bis 1)");
+      console.log("  --top-p <n>         Top-P / Nucleus Sampling setzen (0 bis 1)");
+      console.log("  --stop <text>       Stop-Sequenz setzen (mehrfach moeglich)");
       console.log("  --max-turns <n>     Verlauf auf n Chat-Turns begrenzen, 0 = unbegrenzt");
+      console.log("  --resume            Letzten gespeicherten Verlauf fortsetzen");
+      console.log("  --no-save           Verlauf nicht automatisch speichern");
       console.log("  --debug             Debug-Ausgabe fuer Bedrock Requests aktivieren");
       console.log("  -v, --version      Version anzeigen");
       console.log("  -h, --help          Hilfe anzeigen\n");
@@ -161,23 +177,47 @@ export async function main() {
     }
     let inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
     const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
-    let { creds, identityLabel } = startupContext;
-    let bedrockClient = createBedrockClient(creds);
+    let { region, identityLabel } = startupContext;
+    let bedrockClient = createBedrockClient({ region });
     let debugMode = cliArgs.debug || isDebugEnvEnabled(process.env.BEDROCK_CHAT_DEBUG);
+    let systemPrompt = cliArgs.system;
+    const autoSaveEnabled = !cliArgs.noSave;
     printStartupBanner({ model: currentModel, inferenceConfig });
     if (debugMode) {
       printDebugStatus(debugMode);
     }
 
     let messages = [];
+    const promptHistory = [];
     const usageTotals = emptyUsageTotals();
 
+    function persistSession() {
+      if (autoSaveEnabled) {
+        writeSession(messages, { modelId });
+      }
+    }
+
+    if (cliArgs.resume) {
+      const saved = readSession();
+      if (saved.messages.length) {
+        messages = trimMessagesToMaxTurns(saved.messages, cliArgs.maxTurns);
+        console.log(`${ANSI.green}Verlauf fortgesetzt:${ANSI.reset} ${countHistoryTurns(messages)} Turns${saved.savedAt ? ` (${saved.savedAt})` : ""}`);
+        console.log(terminalLine());
+      } else {
+        console.log(`${ANSI.gray}Kein gespeicherter Verlauf gefunden.${ANSI.reset}`);
+        console.log(terminalLine());
+      }
+    }
+
     while (true) {
-      const prompt = await readPrompt();
+      const prompt = await readPrompt({ history: promptHistory });
       if (prompt === null) break;
       const input = prompt.trim();
 
       if (!input) continue;
+      if (promptHistory[promptHistory.length - 1] !== input) {
+        promptHistory.push(input);
+      }
       if (input === "/exit") break;
       if (input === "/" || input === "/help") {
         printSlashCommands(input);
@@ -185,8 +225,25 @@ export async function main() {
       }
       if (input === "/clear") {
         messages = [];
+        if (autoSaveEnabled) {
+          clearSession();
+        }
         console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
         console.log(terminalLine());
+        continue;
+      }
+      if (input === "/system" || input.startsWith("/system ")) {
+        const value = input.slice("/system".length).trim();
+        if (!value) {
+          printSystemStatus(systemPrompt);
+          continue;
+        }
+        if (["reset", "clear", "default"].includes(value.toLowerCase())) {
+          systemPrompt = value.toLowerCase() === "clear" ? "" : DEFAULT_SYSTEM_PROMPT;
+        } else {
+          systemPrompt = value;
+        }
+        printSystemStatus(systemPrompt);
         continue;
       }
       if (input === "/debug" || input.startsWith("/debug ")) {
@@ -212,7 +269,7 @@ export async function main() {
       if (input === "/account") {
         console.log(formatAccountSummary({
           profile: process.env.AWS_PROFILE || "default",
-          region: creds.region,
+          region,
           identityLabel
         }).join("\n"));
         console.log(terminalLine());
@@ -229,15 +286,18 @@ export async function main() {
 
         try {
           const nextContext = switchAwsProfile(requestedProfile);
-          creds = nextContext.creds;
+          region = nextContext.region;
           identityLabel = nextContext.identityLabel;
-          bedrockClient = createBedrockClient(creds);
+          bedrockClient = createBedrockClient({ region });
           messages = [];
+          if (autoSaveEnabled) {
+            clearSession();
+          }
           console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
           if (identityLabel) {
             console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${identityLabel}`);
           }
-          console.log(`${ANSI.green}Region:${ANSI.reset} ${creds.region}`);
+          console.log(`${ANSI.green}Region:${ANSI.reset} ${region}`);
           console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
           console.log(terminalLine());
         } catch (err) {
@@ -272,33 +332,42 @@ export async function main() {
       process.stdout.write("\n");
 
       const bedrockModelId = getModelInvocationId(currentModel);
+      const interrupter = createStreamInterruptController();
+
+      let fullResponse = "";
+      let lineBuffer = "";
+      let usageRecord = null;
+      let aborted = false;
+      let requestError = null;
 
       try {
         if (debugMode) {
           printDebugLines("Debug Request", formatDebugRequestLines({
             model: currentModel,
             modelId: bedrockModelId,
-            region: creds.region,
+            region,
             profile: process.env.AWS_PROFILE || "default",
             inferenceConfig,
             historyMessages: messages,
             requestMessages,
-            system: cliArgs.system,
+            system: systemPrompt,
             maxTurns: cliArgs.maxTurns
           }));
         }
 
         resetResponseFormatting();
-        let fullResponse = "";
-        let lineBuffer = "";
-        let usageRecord = null;
 
-        for await (const event of streamConverse(bedrockClient, {
+        for await (const event of streamConverseWithRetry(bedrockClient, {
           modelId: bedrockModelId,
           messages: requestMessages,
-          system: cliArgs.system,
-          inferenceConfig
+          system: systemPrompt,
+          inferenceConfig,
+          abortSignal: interrupter.signal
         })) {
+          if (event.type === "retry") {
+            console.error(`${ANSI.gray}Erneuter Versuch ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)} ms (${formatBedrockErrorMessage(event.error)})${ANSI.reset}`);
+            continue;
+          }
           if (event.type === "usage") {
             usageRecord = addUsageRecord(usageTotals, {
               model: currentModel,
@@ -323,7 +392,32 @@ export async function main() {
             lineBuffer = lines[lines.length - 1];
           }
         }
+      } catch (err) {
+        if (isAbortError(err) || interrupter.signal.aborted) {
+          aborted = true;
+        } else {
+          requestError = err;
+        }
+      } finally {
+        interrupter.dispose();
+      }
 
+      if (requestError) {
+        console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(requestError)}${ANSI.reset}`);
+        if (debugMode) {
+          printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
+            model: currentModel,
+            modelId: bedrockModelId,
+            region,
+            inferenceConfig
+          }));
+        } else {
+          console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
+        }
+        if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
+          console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
+        }
+      } else {
         if (lineBuffer) {
           const formatted = formatLine(lineBuffer);
           if (formatted !== null) {
@@ -331,30 +425,24 @@ export async function main() {
           }
         }
 
-        messages = trimMessagesToMaxTurns([
-          ...requestMessages,
-          { role: "assistant", content: [{ text: fullResponse }] }
-        ], cliArgs.maxTurns);
+        if (aborted) {
+          console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
+        }
+
+        if (fullResponse) {
+          messages = trimMessagesToMaxTurns([
+            ...requestMessages,
+            { role: "assistant", content: [{ text: fullResponse }] }
+          ], cliArgs.maxTurns);
+          persistSession();
+        }
+
         if (usageRecord) {
           console.log("");
           console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
         }
-      } catch (err) {
-        console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(err)}${ANSI.reset}`);
-        if (debugMode) {
-          printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(err, {
-            model: currentModel,
-            modelId: bedrockModelId,
-            region: creds.region,
-            inferenceConfig
-          }));
-        } else {
-          console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
-        }
-        if ((err.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
-          console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
-        }
       }
+
       process.stdout.write(ANSI.reset);
       console.log("");
     }
