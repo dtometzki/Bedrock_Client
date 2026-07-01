@@ -28,14 +28,16 @@
     }
   },
   {
-    "id": "eu.anthropic.claude-fable-5",
+    "id": "us.anthropic.claude-fable-5",
     "label": "claude-fable-5",
     "disabledInferenceConfigFields": ["temperature"],
     "aliases": [
+      "eu.anthropic.claude-fable-5",
       "global.anthropic.claude-fable-5",
+      "arn:aws:bedrock:eu-central-1:841986542603:inference-profile/eu.anthropic.claude-fable-5",
       "arn:aws:bedrock:eu-central-1:841986542603:inference-profile/global.anthropic.claude-fable-5"
     ],
-    "profileArn": "arn:aws:bedrock:eu-central-1:841986542603:inference-profile/eu.anthropic.claude-fable-5"
+    "profileArn": "arn:aws:bedrock:us-east-1:841986542603:inference-profile/us.anthropic.claude-fable-5"
   },
   {
     "id": "minimax.minimax-m2.5",
