@@ -74,8 +74,8 @@ export async function promptForModelSelection(models, currentModelId) {
 
     function render() {
       if (renderedLineCount) {
-        process.stdout.write(`\u001b[${renderedLineCount}A`);
-        process.stdout.write("\r\u001b[0J");
+        process.stdout.write(`[${renderedLineCount}A`);
+        process.stdout.write("\r[0J");
       }
 
       const lines = formatModelSelectionLines(models, currentModelId, selectedIndex);
@@ -155,7 +155,7 @@ function longestCommonPrefix(values) {
   return prefix;
 }
 
-export async function readPrompt() {
+export async function readPrompt({ history = [] } = {}) {
   if (!process.stdin.isTTY) {
     const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
     try {
@@ -172,8 +172,12 @@ export async function readPrompt() {
 
   return await new Promise((resolve) => {
     let line = "";
+    let cursor = 0;
     let selectedSlashIndex = 0;
     let done = false;
+
+    let historyIndex = history.length;
+    let historyDraft = "";
 
     const promptVisibleColumns = 2;
     const promptText = `${ANSI.bold}>${ANSI.reset} `;
@@ -198,25 +202,53 @@ export async function readPrompt() {
     function render() {
       clampSlashSelection();
       const suggestions = slashSuggestionLines();
-      process.stdout.write("\r\u001b[0J");
+      process.stdout.write("\r[0J");
       process.stdout.write(`${promptText}${line}`);
       if (suggestions.length) {
         process.stdout.write(`\n${suggestions.join("\n")}`);
-        process.stdout.write(`\u001b[${suggestions.length}A`);
-        process.stdout.write(`\r\u001b[${promptVisibleColumns + line.length}C`);
+        process.stdout.write(`[${suggestions.length}A`);
+      }
+      process.stdout.write("\r");
+      const column = promptVisibleColumns + cursor;
+      if (column > 0) {
+        process.stdout.write(`[${column}C`);
       }
     }
 
-    function replaceLine(nextLine) {
+    function replaceLine(nextLine, nextCursor = nextLine.length) {
       line = nextLine;
+      cursor = Math.max(0, Math.min(nextCursor, nextLine.length));
       selectedSlashIndex = 0;
+    }
+
+    function insertText(text) {
+      line = line.slice(0, cursor) + text + line.slice(cursor);
+      cursor += text.length;
+      selectedSlashIndex = 0;
+    }
+
+    function recallHistory(delta) {
+      if (!history.length) return;
+      if (delta < 0) {
+        if (historyIndex === 0) return;
+        if (historyIndex === history.length) {
+          historyDraft = line;
+        }
+        historyIndex -= 1;
+      } else {
+        if (historyIndex >= history.length) return;
+        historyIndex += 1;
+      }
+      const nextLine = historyIndex >= history.length ? historyDraft : history[historyIndex];
+      replaceLine(nextLine);
+      render();
     }
 
     function cleanup(value) {
       if (done) return;
       done = true;
       process.stdin.off("keypress", onKeypress);
-      process.stdout.write("\r\u001b[0J");
+      process.stdout.write("\r[0J");
       if (value !== null) {
         process.stdout.write(`${promptText}${line}\n`);
       }
@@ -254,13 +286,13 @@ export async function readPrompt() {
       const command = commands[selectedSlashIndex];
       if (!command) return false;
 
-      const insertText = getSlashCommandInsertText(command);
-      if (submit && !isCompleteSlashCommand(command) && line.length > insertText.length) {
+      const insert = getSlashCommandInsertText(command);
+      if (submit && !isCompleteSlashCommand(command) && line.length > insert.length) {
         cleanup(line);
         return true;
       }
 
-      replaceLine(insertText);
+      replaceLine(insert);
       if (submit && isCompleteSlashCommand(command)) {
         cleanup(line);
       } else {
@@ -290,16 +322,56 @@ export async function readPrompt() {
         return;
       }
       if (key.name === "backspace") {
-        replaceLine(line.slice(0, -1));
+        if (cursor > 0) {
+          line = line.slice(0, cursor - 1) + line.slice(cursor);
+          cursor -= 1;
+          selectedSlashIndex = 0;
+        }
         render();
         return;
       }
-      if (key.name === "up" && line.startsWith("/")) {
-        moveSlashSelection(-1);
+      if (key.name === "delete") {
+        if (cursor < line.length) {
+          line = line.slice(0, cursor) + line.slice(cursor + 1);
+          selectedSlashIndex = 0;
+        }
+        render();
         return;
       }
-      if (key.name === "down" && line.startsWith("/")) {
-        moveSlashSelection(1);
+      if (key.name === "left") {
+        cursor = Math.max(0, cursor - 1);
+        render();
+        return;
+      }
+      if (key.name === "right") {
+        cursor = Math.min(line.length, cursor + 1);
+        render();
+        return;
+      }
+      if (key.name === "home" || (key.ctrl && key.name === "a")) {
+        cursor = 0;
+        render();
+        return;
+      }
+      if (key.name === "end" || (key.ctrl && key.name === "e")) {
+        cursor = line.length;
+        render();
+        return;
+      }
+      if (key.name === "up") {
+        if (line.startsWith("/")) {
+          moveSlashSelection(-1);
+        } else {
+          recallHistory(-1);
+        }
+        return;
+      }
+      if (key.name === "down") {
+        if (line.startsWith("/")) {
+          moveSlashSelection(1);
+        } else {
+          recallHistory(1);
+        }
         return;
       }
       if (key.name === "tab") {
@@ -320,7 +392,7 @@ export async function readPrompt() {
         return;
       }
       if (str && !key.ctrl && !key.meta && str >= " ") {
-        replaceLine(line + str);
+        insertText(str);
         render();
       }
     }
@@ -328,4 +400,36 @@ export async function readPrompt() {
     process.stdin.on("keypress", onKeypress);
     render();
   });
+}
+
+export function createStreamInterruptController() {
+  const controller = new AbortController();
+
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
+    return { signal: controller.signal, dispose() {} };
+  }
+
+  readline.emitKeypressEvents(process.stdin);
+  const wasRaw = process.stdin.isRaw;
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+
+  function onKeypress(str, key = {}) {
+    if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+      controller.abort();
+    }
+  }
+
+  process.stdin.on("keypress", onKeypress);
+
+  return {
+    signal: controller.signal,
+    dispose() {
+      process.stdin.off("keypress", onKeypress);
+      if (!wasRaw) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
+    }
+  };
 }

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { parseArgs } from "node:util";
 
 export const DEFAULT_SYSTEM_PROMPT = "Du bist ein hilfreicher KI-Assistent.";
@@ -44,6 +45,29 @@ function parseNumberOption(name, value, { min = -Infinity, max = Infinity, integ
   return numberValue;
 }
 
+function normalizeStopSequences(values) {
+  if (values == null) return [];
+  const list = Array.isArray(values) ? values : [values];
+  return list
+    .map((value) => String(value))
+    .filter((value) => value.length > 0);
+}
+
+function readSystemFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8").trim();
+  } catch (err) {
+    throw new Error(`System-Prompt Datei konnte nicht gelesen werden: ${filePath} (${err.message})`);
+  }
+}
+
+function resolveSystemPrompt(values) {
+  if (values["system-file"] != null) {
+    return readSystemFile(values["system-file"]);
+  }
+  return values.system ?? DEFAULT_SYSTEM_PROMPT;
+}
+
 export function parseCliArgs(argv = process.argv.slice(2)) {
   let parsed;
 
@@ -57,9 +81,14 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
         model: { type: "string", short: "m" },
         profile: { type: "string", short: "p" },
         system: { type: "string", short: "s" },
+        "system-file": { type: "string" },
         "max-tokens": { type: "string" },
         temperature: { type: "string" },
+        "top-p": { type: "string" },
+        stop: { type: "string", multiple: true },
         "max-turns": { type: "string" },
+        resume: { type: "boolean" },
+        "no-save": { type: "boolean" },
         debug: { type: "boolean" }
       }
     });
@@ -76,13 +105,20 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     min: 0,
     max: 1
   }) ?? DEFAULT_TEMPERATURE;
+  const topP = parseNumberOption("top-p", values["top-p"], {
+    min: 0,
+    max: 1
+  });
   const maxTurns = parseNumberOption("max-turns", values["max-turns"], {
     min: 0,
     integer: true
   }) ?? DEFAULT_MAX_HISTORY_TURNS;
+  const stopSequences = normalizeStopSequences(values.stop);
   const inferenceOverrides = {
     ...(values["max-tokens"] != null && { maxTokens }),
-    ...(values.temperature != null && { temperature })
+    ...(values.temperature != null && { temperature }),
+    ...(values["top-p"] != null && { topP }),
+    ...(stopSequences.length ? { stopSequences } : {})
   };
 
   return {
@@ -90,10 +126,14 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     version: Boolean(values.version),
     model: values.model ?? null,
     profile: values.profile ?? null,
-    system: values.system ?? DEFAULT_SYSTEM_PROMPT,
+    system: resolveSystemPrompt(values),
     maxTokens,
     temperature,
+    topP,
+    stopSequences,
     maxTurns,
+    resume: Boolean(values.resume),
+    noSave: Boolean(values["no-save"]),
     debug: Boolean(values.debug),
     inferenceOverrides
   };

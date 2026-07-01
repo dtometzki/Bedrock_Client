@@ -5,14 +5,11 @@ export const DEFAULT_INFERENCE_CONFIG = {
   temperature: 0.7
 };
 
-export function createBedrockClient(creds) {
+export function createBedrockClient({ region } = {}) {
+  // Keine statischen Credentials: Das SDK löst sie über die Default Provider
+  // Chain auf (Env, SSO, Profildateien, Assume-Role) und erneuert sie bei Bedarf.
   return new BedrockRuntimeClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.accessKeyId,
-      secretAccessKey: creds.secretAccessKey,
-      sessionToken: creds.sessionToken || undefined
-    }
+    region: region || "us-east-1"
   });
 }
 
@@ -22,8 +19,13 @@ export function buildInferenceConfig(model, overrides = {}) {
     ...(model?.inferenceConfig || {}),
     ...(model?.maxTokens != null && { maxTokens: model.maxTokens }),
     ...(model?.temperature != null && { temperature: model.temperature }),
+    ...(model?.topP != null && { topP: model.topP }),
     ...(overrides.maxTokens != null && { maxTokens: overrides.maxTokens }),
-    ...(overrides.temperature != null && { temperature: overrides.temperature })
+    ...(overrides.temperature != null && { temperature: overrides.temperature }),
+    ...(overrides.topP != null && { topP: overrides.topP }),
+    ...(Array.isArray(overrides.stopSequences) && overrides.stopSequences.length
+      ? { stopSequences: overrides.stopSequences }
+      : {})
   };
 
   for (const field of model?.disabledInferenceConfigFields || []) {
@@ -122,16 +124,60 @@ export function formatBedrockErrorDiagnostics(err, context = {}) {
   return lines;
 }
 
-export async function* streamConverse(client, { modelId, messages, system, inferenceConfig = DEFAULT_INFERENCE_CONFIG }) {
+export function isAbortError(err) {
+  return err?.name === "AbortError" || err?.name === "TimeoutError" || err?.aborted === true;
+}
+
+const RETRYABLE_ERROR_NAMES = new Set([
+  "ThrottlingException",
+  "TooManyRequestsException",
+  "ServiceUnavailableException",
+  "InternalServerException",
+  "ModelTimeoutException",
+  "RequestTimeout",
+  "RequestTimeoutException"
+]);
+
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+export function isRetryableError(err) {
+  if (!err || isAbortError(err)) return false;
+  if (err.$retryable || err.details?.$retryable) return true;
+  if (err.name && RETRYABLE_ERROR_NAMES.has(err.name)) return true;
+
+  const statusCode = err.$metadata?.httpStatusCode ||
+    err.details?.$metadata?.httpStatusCode ||
+    err.originalStatusCode ||
+    err.details?.originalStatusCode;
+  return statusCode != null && RETRYABLE_STATUS_CODES.has(Number(statusCode));
+}
+
+export function getRetryDelayMs(attempt, baseDelayMs = 500, maxDelayMs = 8000) {
+  const exponential = baseDelayMs * 2 ** (attempt - 1);
+  const jitter = Math.random() * baseDelayMs;
+  return Math.min(maxDelayMs, exponential + jitter);
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function* streamConverse(client, { modelId, messages, system, inferenceConfig = DEFAULT_INFERENCE_CONFIG, abortSignal }) {
   const command = new ConverseStreamCommand({
     modelId,
     messages,
     inferenceConfig,
     ...(system && { system: [{ text: system }] })
   });
-  const response = await client.send(command);
+  const response = await client.send(command, abortSignal ? { abortSignal } : {});
 
   for await (const event of response.stream ?? []) {
+    if (abortSignal?.aborted) {
+      const abortError = new Error("Anfrage abgebrochen.");
+      abortError.name = "AbortError";
+      throw abortError;
+    }
+
     const streamException = getStreamException(event);
     if (streamException) {
       throw streamException;
@@ -145,6 +191,33 @@ export async function* streamConverse(client, { modelId, messages, system, infer
     const usage = event.metadata?.usage;
     if (usage) {
       yield { type: "usage", usage, metrics: event.metadata?.metrics };
+    }
+  }
+}
+
+export async function* streamConverseWithRetry(client, params, {
+  maxRetries = 3,
+  baseDelayMs = 500,
+  sleep = defaultSleep
+} = {}) {
+  let attempt = 0;
+
+  while (true) {
+    let yieldedAny = false;
+    try {
+      for await (const event of streamConverse(client, params)) {
+        yieldedAny = true;
+        yield event;
+      }
+      return;
+    } catch (err) {
+      if (yieldedAny || attempt >= maxRetries || !isRetryableError(err)) {
+        throw err;
+      }
+      attempt += 1;
+      const delayMs = getRetryDelayMs(attempt, baseDelayMs);
+      yield { type: "retry", attempt, maxRetries, delayMs, error: err };
+      await sleep(delayMs);
     }
   }
 }

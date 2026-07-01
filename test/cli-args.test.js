@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   DEFAULT_MAX_HISTORY_TURNS,
@@ -17,7 +20,11 @@ test("parseCliArgs returns defaults", () => {
     system: DEFAULT_SYSTEM_PROMPT,
     maxTokens: DEFAULT_MAX_TOKENS,
     temperature: DEFAULT_TEMPERATURE,
+    topP: null,
+    stopSequences: [],
     maxTurns: DEFAULT_MAX_HISTORY_TURNS,
+    resume: false,
+    noSave: false,
     debug: false,
     inferenceOverrides: {}
   });
@@ -35,8 +42,16 @@ test("parseCliArgs parses supported options", () => {
     "512",
     "--temperature",
     "0.2",
+    "--top-p",
+    "0.8",
+    "--stop",
+    "STOP",
+    "--stop",
+    "ENDE",
     "--max-turns",
     "5",
+    "--resume",
+    "--no-save",
     "--debug"
   ]), {
     help: false,
@@ -46,13 +61,28 @@ test("parseCliArgs parses supported options", () => {
     system: "Kurz antworten.",
     maxTokens: 512,
     temperature: 0.2,
+    topP: 0.8,
+    stopSequences: ["STOP", "ENDE"],
     maxTurns: 5,
+    resume: true,
+    noSave: true,
     debug: true,
     inferenceOverrides: {
       maxTokens: 512,
-      temperature: 0.2
+      temperature: 0.2,
+      topP: 0.8,
+      stopSequences: ["STOP", "ENDE"]
     }
   });
+});
+
+test("parseCliArgs reads system prompt from file", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-chat-system-"));
+  const filePath = path.join(dir, "system.txt");
+  fs.writeFileSync(filePath, "  Antworte auf Deutsch.\n", "utf8");
+
+  assert.equal(parseCliArgs(["--system-file", filePath]).system, "Antworte auf Deutsch.");
+  assert.throws(() => parseCliArgs(["--system-file", path.join(dir, "missing.txt")]), /System-Prompt Datei/);
 });
 
 test("parseCliArgs preserves profile list shortcut", () => {
@@ -65,4 +95,5 @@ test("parseCliArgs rejects invalid options", () => {
   assert.throws(() => parseCliArgs(["--model"]), /Ungueltige Argumente/);
   assert.throws(() => parseCliArgs(["--max-tokens", "0"]), /Ungueltiger Wert/);
   assert.throws(() => parseCliArgs(["--temperature", "2"]), /Ungueltiger Wert/);
+  assert.throws(() => parseCliArgs(["--top-p", "1.5"]), /Ungueltiger Wert/);
 });

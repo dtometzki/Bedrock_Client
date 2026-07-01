@@ -54,6 +54,14 @@ export function formatInferenceConfig(inferenceConfig = {}) {
       maximumFractionDigits: 3
     })}`);
   }
+  if (inferenceConfig.topP != null) {
+    parts.push(`Top P: ${Number(inferenceConfig.topP).toLocaleString("de-DE", {
+      maximumFractionDigits: 3
+    })}`);
+  }
+  if (Array.isArray(inferenceConfig.stopSequences) && inferenceConfig.stopSequences.length) {
+    parts.push(`Stop: ${inferenceConfig.stopSequences.length}`);
+  }
 
   return parts.join(" | ");
 }

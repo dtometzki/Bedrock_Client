@@ -4,7 +4,11 @@ import {
   buildInferenceConfig,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
-  streamConverse
+  getRetryDelayMs,
+  isAbortError,
+  isRetryableError,
+  streamConverse,
+  streamConverseWithRetry
 } from "../src/bedrock.js";
 
 function streamFrom(events) {
@@ -37,6 +41,130 @@ test("buildInferenceConfig omits disabled model fields after CLI overrides", () 
   }), {
     maxTokens: 100
   });
+});
+
+test("buildInferenceConfig applies topP and stopSequences overrides", () => {
+  assert.deepEqual(buildInferenceConfig({}, {
+    topP: 0.5,
+    stopSequences: ["STOP"]
+  }), {
+    maxTokens: 2000,
+    temperature: 0.7,
+    topP: 0.5,
+    stopSequences: ["STOP"]
+  });
+
+  const withoutStop = buildInferenceConfig({}, { stopSequences: [] });
+  assert.equal("stopSequences" in withoutStop, false);
+});
+
+test("isRetryableError recognizes throttling, status codes and retryable flags", () => {
+  assert.equal(isRetryableError({ name: "ThrottlingException" }), true);
+  assert.equal(isRetryableError({ $retryable: {} }), true);
+  assert.equal(isRetryableError({ $metadata: { httpStatusCode: 503 } }), true);
+  assert.equal(isRetryableError({ originalStatusCode: 500 }), true);
+  assert.equal(isRetryableError({ name: "ValidationException", $metadata: { httpStatusCode: 400 } }), false);
+  assert.equal(isRetryableError({ name: "AbortError" }), false);
+  assert.equal(isRetryableError(null), false);
+});
+
+test("isAbortError detects abort and timeout errors", () => {
+  assert.equal(isAbortError({ name: "AbortError" }), true);
+  assert.equal(isAbortError({ name: "TimeoutError" }), true);
+  assert.equal(isAbortError({ aborted: true }), true);
+  assert.equal(isAbortError({ name: "ThrottlingException" }), false);
+});
+
+test("getRetryDelayMs grows with attempts and stays capped", () => {
+  const first = getRetryDelayMs(1, 500, 8000);
+  const second = getRetryDelayMs(2, 500, 8000);
+  assert.ok(first >= 500 && first <= 1000);
+  assert.ok(second >= 1000 && second <= 1500);
+  assert.ok(getRetryDelayMs(20, 500, 8000) <= 8000);
+});
+
+test("streamConverseWithRetry retries a retryable initial failure then succeeds", async () => {
+  let attempts = 0;
+  const client = {
+    async send() {
+      attempts += 1;
+      if (attempts === 1) {
+        const err = new Error("throttled");
+        err.name = "ThrottlingException";
+        throw err;
+      }
+      return {
+        stream: streamFrom([
+          { contentBlockDelta: { delta: { text: "ok" } } }
+        ])
+      };
+    }
+  };
+
+  const events = [];
+  for await (const event of streamConverseWithRetry(client, {
+    modelId: "model-a",
+    messages: []
+  }, { maxRetries: 2, sleep: async () => {} })) {
+    events.push(event);
+  }
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(events.map((event) => event.type), ["retry", "text"]);
+  assert.equal(events[0].attempt, 1);
+});
+
+test("streamConverseWithRetry does not retry after text was already yielded", async () => {
+  let attempts = 0;
+  const client = {
+    async send() {
+      attempts += 1;
+      return {
+        stream: streamFrom([
+          { contentBlockDelta: { delta: { text: "partial" } } },
+          {
+            modelStreamErrorException: {
+              name: "ModelStreamErrorException",
+              message: "mid-stream failure"
+            }
+          }
+        ])
+      };
+    }
+  };
+
+  const seen = [];
+  await assert.rejects(async () => {
+    for await (const event of streamConverseWithRetry(client, {
+      modelId: "model-a",
+      messages: []
+    }, { maxRetries: 3, sleep: async () => {} })) {
+      seen.push(event);
+    }
+  }, /mid-stream failure/);
+
+  assert.equal(attempts, 1);
+  assert.deepEqual(seen.map((event) => event.type), ["text"]);
+});
+
+test("streamConverse throws AbortError when the signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const client = {
+    async send() {
+      return { stream: streamFrom([{ contentBlockDelta: { delta: { text: "x" } } }]) };
+    }
+  };
+
+  await assert.rejects(async () => {
+    for await (const event of streamConverse(client, {
+      modelId: "model-a",
+      messages: [],
+      abortSignal: controller.signal
+    })) {
+      void event;
+    }
+  }, (err) => isAbortError(err));
 });
 
 test("streamConverse yields text and usage events", async () => {

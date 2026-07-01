@@ -16,10 +16,15 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Shows the active AWS account and region with `/account`
 - Shows current Amazon Bedrock billing costs and session token usage with `/usage`
 - Limits retained chat history by default to keep context size predictable
+- Optionally resumes the previous chat history with `--resume` and auto-saves the running session
+- Lets you set the system prompt at startup (`--system`, `--system-file`) and change it live with `/system`
+- Lets you interrupt a running response with `Esc` without leaving the chat
+- Retries throttled or transient Bedrock errors automatically with exponential backoff
+- Supports inline line editing (arrow keys, Home/End, Delete) and an input history via `Up`/`Down`
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
-- Calls Bedrock through the official AWS SDK for JavaScript
+- Calls Bedrock through the official AWS SDK for JavaScript using the default credential provider chain, so SSO and role sessions refresh automatically
 - Supports AWS profile selection at startup and during the running chat
-- Supports configurable `maxTokens`, `temperature` and history size
+- Supports configurable `maxTokens`, `temperature`, `topP` and stop sequences
 - Supports a debug mode for Bedrock request and error diagnostics
 - Supports standalone CLI usage through `bedrock-chat`
 
@@ -89,6 +94,15 @@ Set Bedrock inference parameters:
 
 ```bash
 node app_aws.js --max-tokens 4096 --temperature 0.3
+node app_aws.js --top-p 0.9
+node app_aws.js --stop "###" --stop "Ende"
+```
+
+Set the system prompt, inline or from a file:
+
+```bash
+node app_aws.js --system "Antworte kurz und auf Deutsch."
+node app_aws.js --system-file ./prompts/system.txt
 ```
 
 Keep more or less local chat history:
@@ -96,6 +110,13 @@ Keep more or less local chat history:
 ```bash
 node app_aws.js --max-turns 50
 node app_aws.js --max-turns 0
+```
+
+Resume the previous session or disable auto-saving:
+
+```bash
+node app_aws.js --resume
+node app_aws.js --no-save
 ```
 
 Enable Bedrock request and error diagnostics:
@@ -149,7 +170,7 @@ Notes:
 - `disabled` is optional. Set it to `true` to keep a model configured but hide it from selection.
 - `aliases` is optional and lets old saved IDs or alternative names resolve to the same model.
 - `profileArn` is optional. If set, the client sends that ARN to Bedrock while keeping `id` and `label` for selection.
-- `pricingUsdPer1M` is optional and powers the `/usage` cost estimate.
+- `pricingUsdPer1M` is optional and powers the `/usage` cost estimate. If it is omitted, the client falls back to a small built-in price table (see [`src/usage.js`](./src/usage.js), current as of 2026-06); models without a match show `n/a` instead of an estimate. Prefer setting `pricingUsdPer1M` per model so estimates stay accurate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.
 - If `label` is omitted, the CLI derives one automatically from `id`.
@@ -166,6 +187,14 @@ npm test
 
 The test suite runs syntax checks and unit tests. It does not call your real AWS account.
 
+Optional style linting (downloads ESLint on demand, no dev dependency required):
+
+```bash
+npm run lint
+```
+
+Continuous integration runs `npm test` on Node 20 and 22 plus the lint step via GitHub Actions (see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)).
+
 ## Release Notes
 
 See [`CHANGELOG.md`](./CHANGELOG.md).
@@ -179,9 +208,12 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 - `/account` shows the active AWS account and region
 - `/profile` lists AWS profiles
 - `/profile <profile>` switches the active AWS profile for the running chat
+- `Left`/`Right`, `Home`/`End` and `Delete` edit the current input line; `Up`/`Down` recall previous inputs
+- `Esc` interrupts a running response without leaving the chat
 - `/model` opens the model selection menu; use `Up`/`Down` and `Enter` to switch
+- `/system` shows the active system prompt; `/system <text>` sets it, `/system reset` restores the default
 - `/debug` toggles request and error diagnostics; `/debug on` and `/debug off` set it explicitly
 - `/usage` shows current Amazon Bedrock billing costs from AWS Cost Explorer plus current session token usage
 - `/history` shows the retained chat history and configured limit
-- `/clear` clears chat history
+- `/clear` clears chat history and the saved session
 - `/exit` exits the client

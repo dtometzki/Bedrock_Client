@@ -58,6 +58,17 @@ export function formatAwsIdentity(identity) {
   return identity.UserId ? `${identity.UserId}${account}` : "";
 }
 
+export function isMissingAwsCredentials(errorText) {
+  return /unable to locate credentials|could not be found|no credentials|credentials not found/i.test(errorText);
+}
+
+export function resolveAwsRegion() {
+  return process.env.AWS_REGION ||
+    process.env.AWS_DEFAULT_REGION ||
+    getAwsConfigValue("region") ||
+    "us-east-1";
+}
+
 export function loadAwsIdentity() {
   try {
     const identityJson = execSync("aws sts get-caller-identity --output json", {
@@ -70,52 +81,24 @@ export function loadAwsIdentity() {
     if (isExpiredAwsSession(errorText)) {
       throw new Error(`AWS Session abgelaufen. Bitte neu anmelden:\n\n  ${awsLoginCommand()}`);
     }
+    if (isMissingAwsCredentials(errorText)) {
+      throw new Error(`AWS Credentials nicht gefunden. Bitte anmelden oder konfigurieren:\n\n  ${awsLoginCommand()}\n  aws configure`);
+    }
     return "";
   }
 }
 
-export function loadAwsCredentials() {
-  const creds = {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
-    sessionToken: process.env.AWS_SESSION_TOKEN || "",
-    region: process.env.AWS_REGION || getAwsConfigValue("region") || "us-east-1"
-  };
-
-  if (!creds.accessKeyId || !creds.secretAccessKey) {
-    try {
-      const exportJson = execSync("aws configure export-credentials", {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"]
-      });
-      const parsed = JSON.parse(exportJson);
-      if (parsed.AccessKeyId && parsed.SecretAccessKey) {
-        creds.accessKeyId = parsed.AccessKeyId;
-        creds.secretAccessKey = parsed.SecretAccessKey;
-        creds.sessionToken = parsed.SessionToken || "";
-      }
-    } catch (err) {
-      const errorText = getCommandErrorText(err);
-      if (isExpiredAwsSession(errorText)) {
-        throw new Error(`AWS Session abgelaufen. Bitte neu anmelden:\n\n  ${awsLoginCommand()}`);
-      }
-
-      creds.accessKeyId = creds.accessKeyId || getAwsConfigValue("aws_access_key_id");
-      creds.secretAccessKey = creds.secretAccessKey || getAwsConfigValue("aws_secret_access_key");
-      creds.sessionToken = creds.sessionToken || getAwsConfigValue("aws_session_token");
-    }
-  }
-
-  if (!creds.accessKeyId || !creds.secretAccessKey) {
-    throw new Error(`AWS Credentials nicht gefunden. Bitte anmelden oder konfigurieren:\n\n  ${awsLoginCommand()}\n  aws configure`);
-  }
-  return creds;
-}
-
+// Der Bedrock-Client nutzt die Default Credential Provider Chain des AWS SDK
+// (Umgebungsvariablen, SSO, geteilte Profildateien, Assume-Role). Das SDK
+// aktualisiert dabei ablaufende SSO-/Rollen-Sessions selbstständig, statt dass
+// der Client statisch extrahierte Schlüssel für die gesamte Laufzeit hält.
 export function loadAwsContext() {
-  const creds = loadAwsCredentials();
   const identityLabel = loadAwsIdentity();
-  return { creds, identityLabel, profile: getActiveAwsProfile() };
+  return {
+    region: resolveAwsRegion(),
+    identityLabel,
+    profile: getActiveAwsProfile()
+  };
 }
 
 export function listAwsProfiles() {
