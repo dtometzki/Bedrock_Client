@@ -9,6 +9,12 @@
     }
   },
   {
+    "id": "us.anthropic.claude-sonnet-5",
+    "label": "claude-sonnet-5",
+    "disabledInferenceConfigFields": ["temperature"],
+    "profileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"
+  },
+  {
     "id": "global.anthropic.claude-opus-4-6-v1",
     "label": "claude-opus-4-6-v1",
     "pricingUsdPer1M": {
