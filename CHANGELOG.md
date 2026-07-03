@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0 - 2026-07-03
+
+- Restore the previously used model automatically when resuming a session with `--resume`.
+- Add `/model <name>` for switching the model directly by name, label or alias without the interactive menu.
+- Add `/retry` to resend the last prompt; a directly preceding answer to the same prompt is replaced in the history.
+- Add `/export [file]` to export the chat history as a Markdown file.
+- Mark responses interrupted with `Esc` as incomplete in the saved history.
+- Run the `/usage` Cost Explorer queries asynchronously so the CLI no longer blocks while AWS billing data loads.
+- Stream extended-thinking (reasoning) content dimmed instead of discarding it; reasoning is not stored in the chat history.
+- Add `-r, --region <name>` to override the AWS region independently of the active profile, persisting across `/profile` switches.
+- Add tests for the Markdown export module, reasoning stream events and region parsing.
+
 ## 1.5.0 - 2026-07-01
 
 - Interrupt a running Bedrock response with `Esc` without leaving the chat, backed by an `AbortController` on the Converse stream.

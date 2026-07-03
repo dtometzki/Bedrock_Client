@@ -17,7 +17,7 @@ import {
 } from "./config.js";
 import { clearSession, readSession, writeSession } from "./session.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
-import { getModelInvocationId, loadModels, resolveStartupModel } from "./models.js";
+import { findModel, getModelInvocationId, loadModels, resolveStartupModel } from "./models.js";
 import {
   formatProfileList,
   listAwsProfiles,
@@ -34,6 +34,7 @@ import {
   streamConverseWithRetry
 } from "./bedrock.js";
 import { createStreamInterruptController, promptForModelSelection, readPrompt } from "./prompt.js";
+import { exportHistoryToMarkdown } from "./export.js";
 import { formatLine, resetResponseFormatting } from "./response-format.js";
 import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
 
@@ -118,6 +119,7 @@ export async function main() {
       console.log("  -m, --model <name>  Modell beim Start setzen");
       console.log("  -p, --profile <name> AWS Profil beim Start setzen");
       console.log("  -p -list           AWS Profile anzeigen und beenden");
+      console.log("  -r, --region <name> AWS Region ueberschreiben");
       console.log("  -s, --system <text> System Prompt setzen");
       console.log("  --system-file <pfad> System Prompt aus Datei laden");
       console.log("  --max-tokens <n>    Max. Antwort-Tokens setzen");
@@ -148,13 +150,17 @@ export async function main() {
 
     const legacyLastModelPath = new URL("../.last_model", import.meta.url);
     const lastModelId = readLastModelId(legacyLastModelPath);
+    const savedSession = cliArgs.resume ? readSession() : null;
+    const resumeModelId = savedSession?.modelId && findModel(models, savedSession.modelId)
+      ? savedSession.modelId
+      : null;
     const activeModel = resolveStartupModel(models, {
       requestedModel: cliArgs.model,
-      lastModelId
+      lastModelId: resumeModelId ?? lastModelId
     });
     let modelId = activeModel.id;
 
-    if (!cliArgs.model && !lastModelId && models.length > 1) {
+    if (!cliArgs.model && !resumeModelId && !lastModelId && models.length > 1) {
       const selected = await promptForModelSelection(models, modelId);
       if (selected) {
         modelId = selected.id;
@@ -176,6 +182,11 @@ export async function main() {
       } catch {}
     }
     let inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
+    if (cliArgs.region) {
+      // Ueberschreibt die Region der Default-Aufloesung (Env, Profil-Konfiguration).
+      // Gilt auch nach /profile-Wechseln, da resolveAwsRegion AWS_REGION bevorzugt.
+      process.env.AWS_REGION = cliArgs.region;
+    }
     const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
     let { region, identityLabel } = startupContext;
     let bedrockClient = createBedrockClient({ region });
@@ -188,6 +199,7 @@ export async function main() {
     }
 
     let messages = [];
+    let lastPrompt = null;
     const promptHistory = [];
     const usageTotals = emptyUsageTotals();
 
@@ -198,10 +210,13 @@ export async function main() {
     }
 
     if (cliArgs.resume) {
-      const saved = readSession();
+      const saved = savedSession;
       if (saved.messages.length) {
         messages = trimMessagesToMaxTurns(saved.messages, cliArgs.maxTurns);
         console.log(`${ANSI.green}Verlauf fortgesetzt:${ANSI.reset} ${countHistoryTurns(messages)} Turns${saved.savedAt ? ` (${saved.savedAt})` : ""}`);
+        if (resumeModelId && !cliArgs.model) {
+          console.log(`${ANSI.green}Modell wiederhergestellt:${ANSI.reset} ${currentModel.label || modelId}`);
+        }
         console.log(terminalLine());
       } else {
         console.log(`${ANSI.gray}Kein gespeicherter Verlauf gefunden.${ANSI.reset}`);
@@ -259,7 +274,26 @@ export async function main() {
         continue;
       }
       if (input === "/usage") {
-        printUsageSummary(usageTotals);
+        await printUsageSummary(usageTotals);
+        continue;
+      }
+      if (input === "/export" || input.startsWith("/export ")) {
+        if (!messages.length) {
+          console.log(`${ANSI.gray}Kein Verlauf zum Exportieren.${ANSI.reset}`);
+          console.log(terminalLine());
+          continue;
+        }
+        const targetPath = input.slice("/export".length).trim();
+        try {
+          const exportedPath = exportHistoryToMarkdown(messages, targetPath, {
+            modelLabel: currentModel.label || modelId,
+            systemPrompt
+          });
+          console.log(`${ANSI.green}Exportiert:${ANSI.reset} ${exportedPath}`);
+        } catch (err) {
+          console.error(`${ANSI.yellow}Export fehlgeschlagen: ${err.message}${ANSI.reset}`);
+        }
+        console.log(terminalLine());
         continue;
       }
       if (input === "/history") {
@@ -306,8 +340,20 @@ export async function main() {
         }
         continue;
       }
-      if (input === "/model") {
-        const selected = await promptForModelSelection(models, modelId);
+      if (input === "/model" || input.startsWith("/model ")) {
+        const requestedModel = input.slice("/model".length).trim();
+        let selected = null;
+        if (requestedModel) {
+          selected = findModel(models, requestedModel);
+          if (!selected) {
+            console.log(`${ANSI.yellow}Modell nicht gefunden:${ANSI.reset} ${requestedModel}`);
+            console.log(`${ANSI.gray}Verfuegbar: ${models.map((m) => m.label).join(", ")}${ANSI.reset}`);
+            console.log(terminalLine());
+            continue;
+          }
+        } else {
+          selected = await promptForModelSelection(models, modelId);
+        }
         if (selected) {
           modelId = selected.id;
           currentModel = selected;
@@ -320,14 +366,31 @@ export async function main() {
         }
         continue;
       }
-      if (input.startsWith("/")) {
+      let promptText = input;
+      if (input === "/retry") {
+        if (!lastPrompt) {
+          console.log(`${ANSI.yellow}Kein vorheriger Prompt zum Wiederholen.${ANSI.reset}`);
+          console.log(terminalLine());
+          continue;
+        }
+        promptText = lastPrompt;
+        const lastUser = messages[messages.length - 2];
+        const lastAssistant = messages[messages.length - 1];
+        if (lastAssistant?.role === "assistant" &&
+            lastUser?.role === "user" &&
+            lastUser.content?.[0]?.text === lastPrompt) {
+          messages = messages.slice(0, -2);
+        }
+        console.log(`${ANSI.gray}Wiederhole: ${promptText}${ANSI.reset}`);
+      } else if (input.startsWith("/")) {
         const commandName = input.split(/\s+/, 1)[0];
         console.log(`${ANSI.yellow}Unbekannter Befehl:${ANSI.reset} ${commandName}`);
         printSlashCommands(commandName);
         continue;
       }
 
-      const userMessage = { role: "user", content: [{ text: input }] };
+      lastPrompt = promptText;
+      const userMessage = { role: "user", content: [{ text: promptText }] };
       const requestMessages = [...messages, userMessage];
       process.stdout.write("\n");
 
@@ -339,6 +402,7 @@ export async function main() {
       let usageRecord = null;
       let aborted = false;
       let requestError = null;
+      let reasoningOpen = false;
 
       try {
         if (debugMode) {
@@ -376,6 +440,18 @@ export async function main() {
             });
             continue;
           }
+          if (event.type === "reasoning") {
+            if (!reasoningOpen) {
+              process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
+              reasoningOpen = true;
+            }
+            process.stdout.write(event.text);
+            continue;
+          }
+          if (reasoningOpen) {
+            process.stdout.write(`${ANSI.reset}\n\n`);
+            reasoningOpen = false;
+          }
 
           const text = event.text;
           fullResponse += text;
@@ -399,6 +475,10 @@ export async function main() {
           requestError = err;
         }
       } finally {
+        if (reasoningOpen) {
+          process.stdout.write(`${ANSI.reset}\n`);
+          reasoningOpen = false;
+        }
         interrupter.dispose();
       }
 
@@ -430,9 +510,12 @@ export async function main() {
         }
 
         if (fullResponse) {
+          const responseText = aborted
+            ? `${fullResponse}\n\n[Antwort abgebrochen – unvollstaendig]`
+            : fullResponse;
           messages = trimMessagesToMaxTurns([
             ...requestMessages,
-            { role: "assistant", content: [{ text: fullResponse }] }
+            { role: "assistant", content: [{ text: responseText }] }
           ], cliArgs.maxTurns);
           persistSession();
         }

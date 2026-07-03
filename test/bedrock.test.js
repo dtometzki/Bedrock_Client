@@ -260,3 +260,26 @@ test("streamConverse surfaces Bedrock stream exception events", async () => {
     "Originalmeldung: provider failed"
   ]);
 });
+
+test("streamConverse yields reasoning deltas separately from text", async () => {
+  const client = {
+    async send() {
+      return {
+        stream: streamFrom([
+          { contentBlockDelta: { delta: { reasoningContent: { text: "denke nach" } } } },
+          { contentBlockDelta: { delta: { text: "Antwort" } } }
+        ])
+      };
+    }
+  };
+
+  const events = [];
+  for await (const event of streamConverse(client, { modelId: "model-a", messages: [] })) {
+    events.push(event);
+  }
+
+  assert.deepEqual(events, [
+    { type: "reasoning", text: "denke nach" },
+    { type: "text", text: "Antwort" }
+  ]);
+});

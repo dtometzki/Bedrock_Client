@@ -183,6 +183,11 @@ export async function* streamConverse(client, { modelId, messages, system, infer
       throw streamException;
     }
 
+    const reasoningText = event.contentBlockDelta?.delta?.reasoningContent?.text;
+    if (reasoningText) {
+      yield { type: "reasoning", text: reasoningText };
+    }
+
     const text = event.contentBlockDelta?.delta?.text;
     if (text) {
       yield { type: "text", text };

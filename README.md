@@ -11,12 +11,13 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 ## What It Does
 
 - Starts an interactive Bedrock chat in the terminal
-- Lets you choose and switch models interactively, including arrow-key navigation in `/model`
+- Lets you choose and switch models interactively, including arrow-key navigation in `/model` and direct switching with `/model <name>`
 - Stores the last selected model for the next start
 - Shows the active AWS account and region with `/account`
 - Shows current Amazon Bedrock billing costs and session token usage with `/usage`
 - Limits retained chat history by default to keep context size predictable
-- Optionally resumes the previous chat history with `--resume` and auto-saves the running session
+- Optionally resumes the previous chat history with `--resume` (including the previously used model) and auto-saves the running session
+- Resends the last prompt with `/retry` and exports the chat history as Markdown with `/export [file]`
 - Lets you set the system prompt at startup (`--system`, `--system-file`) and change it live with `/system`
 - Lets you interrupt a running response with `Esc` without leaving the chat
 - Retries throttled or transient Bedrock errors automatically with exponential backoff
@@ -24,6 +25,8 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
 - Calls Bedrock through the official AWS SDK for JavaScript using the default credential provider chain, so SSO and role sessions refresh automatically
 - Supports AWS profile selection at startup and during the running chat
+- Supports overriding the AWS region with `-r, --region` independently of the active profile
+- Streams extended-thinking (reasoning) content dimmed before the answer, without storing it in the history
 - Supports configurable `maxTokens`, `temperature`, `topP` and stop sequences
 - Supports a debug mode for Bedrock request and error diagnostics
 - Supports standalone CLI usage through `bedrock-chat`

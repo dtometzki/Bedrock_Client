@@ -17,6 +17,7 @@ test("parseCliArgs returns defaults", () => {
     version: false,
     model: null,
     profile: null,
+    region: null,
     system: DEFAULT_SYSTEM_PROMPT,
     maxTokens: DEFAULT_MAX_TOKENS,
     temperature: DEFAULT_TEMPERATURE,
@@ -36,6 +37,8 @@ test("parseCliArgs parses supported options", () => {
     "claude",
     "--profile",
     "dev",
+    "--region",
+    "eu-central-1",
     "--system",
     "Kurz antworten.",
     "--max-tokens",
@@ -58,6 +61,7 @@ test("parseCliArgs parses supported options", () => {
     version: false,
     model: "claude",
     profile: "dev",
+    region: "eu-central-1",
     system: "Kurz antworten.",
     maxTokens: 512,
     temperature: 0.2,
@@ -83,6 +87,10 @@ test("parseCliArgs reads system prompt from file", () => {
 
   assert.equal(parseCliArgs(["--system-file", filePath]).system, "Antworte auf Deutsch.");
   assert.throws(() => parseCliArgs(["--system-file", path.join(dir, "missing.txt")]), /System-Prompt Datei/);
+});
+
+test("parseCliArgs parses the region short flag", () => {
+  assert.equal(parseCliArgs(["-r", "us-west-2"]).region, "us-west-2");
 });
 
 test("parseCliArgs preserves profile list shortcut", () => {

@@ -1,5 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { awsLoginCommand, getCommandErrorText, isExpiredAwsSession } from "./aws-context.js";
+
+const execFileAsync = promisify(execFile);
 import { ANSI, formatInteger, formatLatency, formatUsd, terminalLine } from "./ui.js";
 
 // Eingebaute Fallback-Preise (USD pro 1 Mio. Tokens) fuer die Session-Kostenschaetzung.
@@ -128,11 +131,11 @@ function getCurrentBillingPeriod() {
   };
 }
 
-export function loadCurrentBedrockBillingCost() {
+export async function loadCurrentBedrockBillingCost() {
   const period = getCurrentBillingPeriod();
 
   try {
-    const dimensionJson = execFileSync("aws", [
+    const { stdout: dimensionJson } = await execFileAsync("aws", [
       "ce",
       "get-dimension-values",
       "--time-period",
@@ -147,7 +150,6 @@ export function loadCurrentBedrockBillingCost() {
       "json"
     ], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
       timeout: 15000
     });
     const dimensionValues = JSON.parse(dimensionJson).DimensionValues || [];
@@ -171,7 +173,7 @@ export function loadCurrentBedrockBillingCost() {
         Values: serviceNames
       }
     });
-    const billingJson = execFileSync("aws", [
+    const { stdout: billingJson } = await execFileAsync("aws", [
       "ce",
       "get-cost-and-usage",
       "--time-period",
@@ -188,7 +190,6 @@ export function loadCurrentBedrockBillingCost() {
       "json"
     ], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
       timeout: 15000
     });
 
@@ -220,8 +221,8 @@ export function loadCurrentBedrockBillingCost() {
   }
 }
 
-export function printBillingCost() {
-  const billing = loadCurrentBedrockBillingCost();
+export async function printBillingCost() {
+  const billing = await loadCurrentBedrockBillingCost();
   console.log(`${ANSI.green}AWS Billing:${ANSI.reset} Bedrock, aktueller Monat`);
 
   if (billing.error) {
@@ -253,8 +254,8 @@ export function printUsageRecord(record) {
   console.log(`  Latenz: ${formatLatency(record.latencyMs)}`);
 }
 
-export function printUsageSummary(usageTotals) {
-  printBillingCost();
+export async function printUsageSummary(usageTotals) {
+  await printBillingCost();
   console.log("");
 
   if (!usageTotals.requests) {
