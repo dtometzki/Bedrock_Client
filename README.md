@@ -11,6 +11,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 ## What It Does
 
 - Starts an interactive Bedrock chat in the terminal
+- Optionally serves the chat as a local web GUI with `--web` (streaming, Markdown rendering, model switching)
 - Lets you choose and switch models interactively, including arrow-key navigation in `/model` and direct switching with `/model <name>`
 - Stores the last selected model for the next start
 - Shows the active AWS account and region with `/account`
@@ -135,6 +136,26 @@ If linked with `npm link`, start it as a CLI:
 bedrock-chat
 bedrock-chat -m claude-sonnet-4-6
 ```
+
+## Web GUI
+
+Start the chat as a local web interface instead of the terminal UI:
+
+```bash
+node app_aws.js --web
+node app_aws.js --web --port 8080
+node app_aws.js --web --no-open
+```
+
+The default browser opens automatically with the GUI (default `http://127.0.0.1:3456`); `--no-open` disables that and only prints the URL.
+
+The web GUI supports streaming responses with Markdown rendering, model switching, collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, and per-response token/cost estimates. CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
+
+Notes:
+
+- The server binds to `127.0.0.1` only and keeps AWS credentials on the server side; the browser never sees them.
+- Markdown rendering loads `marked` and `DOMPurify` from a CDN; without internet access the GUI falls back to plain text.
+- One response streams at a time; a second parallel request is rejected until the first finishes or is aborted.
 
 ## Add A Model
 

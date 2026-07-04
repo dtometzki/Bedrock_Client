@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bedrock Chat</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #262624;
+    --bg-panel: #30302e;
+    --bg-input: #3a3a37;
+    --border: #47464233;
+    --border-strong: #4a4945;
+    --text: #e8e6e1;
+    --text-dim: #9d9b94;
+    --accent: #d97757;
+    --user-bubble: #3d3d3a;
+    --code-bg: #1f1f1d;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border-strong);
+    background: var(--bg-panel);
+    flex-wrap: wrap;
+  }
+  header .logo {
+    color: var(--accent);
+    font-size: 18px;
+    font-weight: 700;
+  }
+  header .title { font-weight: 600; }
+  header .spacer { flex: 1; }
+  .chip {
+    color: var(--text-dim);
+    font-size: 12.5px;
+    background: var(--bg-input);
+    border-radius: 999px;
+    padding: 3px 12px;
+    white-space: nowrap;
+  }
+  select, button {
+    background: var(--bg-input);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+  }
+  select:hover, button:hover { border-color: var(--text-dim); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.08); }
+  button:disabled { opacity: 0.45; cursor: default; }
+
+  main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 0 12px;
+  }
+  .container { max-width: 820px; margin: 0 auto; padding: 0 20px; }
+
+  .empty {
+    text-align: center;
+    color: var(--text-dim);
+    margin-top: 12vh;
+  }
+  .empty h1 { font-size: 26px; color: var(--text); font-weight: 600; }
+
+  .msg { margin-bottom: 18px; }
+  .msg.user { display: flex; justify-content: flex-end; }
+  .msg.user .bubble {
+    background: var(--user-bubble);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    max-width: 75%;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg.assistant .content { padding: 2px 4px; }
+  .msg.assistant .content > :first-child { margin-top: 0; }
+  .msg.assistant .content > :last-child { margin-bottom: 0; }
+  .msg .meta {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 6px;
+    padding-left: 4px;
+  }
+  .msg .error {
+    color: #e4b463;
+    background: #4a3c2333;
+    border: 1px solid #e4b46344;
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+
+  details.reasoning {
+    color: var(--text-dim);
+    font-size: 13px;
+    border-left: 2px solid var(--border-strong);
+    padding-left: 12px;
+    margin-bottom: 10px;
+  }
+  details.reasoning summary { cursor: pointer; user-select: none; }
+  details.reasoning pre {
+    white-space: pre-wrap;
+    font: inherit;
+    margin: 6px 0 0;
+  }
+
+  .content pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-size: 13px;
+  }
+  .content code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 13px;
+  }
+  .content pre code { background: none; padding: 0; }
+  .content table { border-collapse: collapse; }
+  .content th, .content td { border: 1px solid var(--border-strong); padding: 5px 10px; }
+  .content a { color: var(--accent); }
+
+  .cursor {
+    display: inline-block;
+    width: 8px; height: 16px;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  footer {
+    padding: 8px 20px 16px;
+    background: var(--bg);
+  }
+  .inputbox {
+    max-width: 820px;
+    margin: 0 auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 16px;
+    padding: 10px 12px;
+  }
+  .inputbox:focus-within { border-color: var(--text-dim); }
+  textarea {
+    width: 100%;
+    background: none;
+    border: none;
+    outline: none;
+    resize: none;
+    color: var(--text);
+    font: inherit;
+    max-height: 200px;
+    padding: 4px 6px;
+  }
+  .inputrow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .statusline {
+    color: var(--text-dim);
+    font-size: 12px;
+    flex: 1;
+    padding-left: 6px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">✳</span>
+  <span class="title">Bedrock Chat</span>
+  <select id="modelSelect" title="Modell wechseln"></select>
+  <span class="spacer"></span>
+  <span class="chip" id="accountChip">–</span>
+  <button id="systemBtn" title="System Prompt anzeigen/ändern">System</button>
+  <button id="clearBtn" title="Verlauf leeren">Verlauf leeren</button>
+</header>
+
+<main id="main">
+  <div class="container" id="messages">
+    <div class="empty" id="empty">
+      <h1>Womit kann ich helfen?</h1>
+      <p>Nachrichten gehen direkt an AWS Bedrock über dein lokales AWS-Profil.</p>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="inputbox">
+    <textarea id="input" rows="2" placeholder="Nachricht an Bedrock…"></textarea>
+    <div class="inputrow">
+      <span class="statusline" id="status"></span>
+      <button id="stopBtn" style="display:none">Stopp (Esc)</button>
+      <button id="sendBtn" class="primary">Senden</button>
+    </div>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+
+  const el = {
+    messages: document.getElementById("messages"),
+    empty: document.getElementById("empty"),
+    main: document.getElementById("main"),
+    input: document.getElementById("input"),
+    sendBtn: document.getElementById("sendBtn"),
+    stopBtn: document.getElementById("stopBtn"),
+    clearBtn: document.getElementById("clearBtn"),
+    systemBtn: document.getElementById("systemBtn"),
+    modelSelect: document.getElementById("modelSelect"),
+    accountChip: document.getElementById("accountChip"),
+    status: document.getElementById("status")
+  };
+
+  let busy = false;
+  let currentSystemPrompt = "";
+
+  function renderMarkdown(text) {
+    if (window.marked && window.DOMPurify) {
+      return DOMPurify.sanitize(marked.parse(text));
+    }
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML.replace(/\n/g, "<br>");
+  }
+
+  function scrollToBottom() {
+    el.main.scrollTop = el.main.scrollHeight;
+  }
+
+  function hideEmpty() {
+    if (el.empty) { el.empty.remove(); el.empty = null; }
+  }
+
+  function addUserMessage(text) {
+    hideEmpty();
+    const wrap = document.createElement("div");
+    wrap.className = "msg user";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    el.messages.appendChild(wrap);
+    scrollToBottom();
+  }
+
+  function addAssistantMessage() {
+    hideEmpty();
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant";
+    const content = document.createElement("div");
+    content.className = "content";
+    wrap.appendChild(content);
+    el.messages.appendChild(wrap);
+    return { wrap, content };
+  }
+
+  function setBusy(value) {
+    busy = value;
+    el.sendBtn.disabled = value;
+    el.stopBtn.style.display = value ? "" : "none";
+    el.modelSelect.disabled = value;
+    el.clearBtn.disabled = value;
+    el.systemBtn.disabled = value;
+    if (!value) el.status.textContent = "";
+  }
+
+  function formatUsd(value) {
+    return value == null ? "n/a" : "$" + value.toFixed(4);
+  }
+
+  function applyState(state) {
+    el.modelSelect.innerHTML = "";
+    state.models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.label;
+      option.selected = model.id === state.modelId;
+      el.modelSelect.appendChild(option);
+    });
+    const account = [state.profile, state.region, state.identityLabel]
+      .filter(Boolean).join(" · ");
+    el.accountChip.textContent = account || "–";
+    currentSystemPrompt = state.systemPrompt || "";
+    el.messages.querySelectorAll(".msg").forEach((node) => node.remove());
+    if (state.messages.length) hideEmpty();
+    state.messages.forEach((message) => {
+      if (message.role === "user") {
+        addUserMessage(message.text);
+      } else {
+        const { content } = addAssistantMessage();
+        content.innerHTML = renderMarkdown(message.text);
+      }
+    });
+    scrollToBottom();
+  }
+
+  async function loadState() {
+    const response = await fetch("/api/state");
+    applyState(await response.json());
+  }
+
+  async function postJson(url, payload) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {})
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || response.statusText);
+    return data;
+  }
+
+  async function sendMessage() {
+    const text = el.input.value.trim();
+    if (!text || busy) return;
+
+    el.input.value = "";
+    el.input.style.height = "auto";
+    setBusy(true);
+    addUserMessage(text);
+
+    const { content } = addAssistantMessage();
+    const cursor = document.createElement("span");
+    cursor.className = "cursor";
+    content.appendChild(cursor);
+    scrollToBottom();
+
+    let answer = "";
+    let reasoning = "";
+    let reasoningEl = null;
+    let meta = null;
+
+    const renderAnswer = () => {
+      content.innerHTML = renderMarkdown(answer);
+      content.appendChild(cursor);
+    };
+
+    const handleEvent = (event) => {
+      if (event.type === "text") {
+        answer += event.text;
+        renderAnswer();
+      } else if (event.type === "reasoning") {
+        if (!reasoningEl) {
+          reasoningEl = document.createElement("details");
+          reasoningEl.className = "reasoning";
+          reasoningEl.innerHTML = "<summary>Reasoning</summary><pre></pre>";
+          content.parentNode.insertBefore(reasoningEl, content);
+        }
+        reasoning += event.text;
+        reasoningEl.querySelector("pre").textContent = reasoning;
+      } else if (event.type === "retry") {
+        el.status.textContent = "Erneuter Versuch " + event.attempt + "/" +
+          event.maxRetries + " in " + event.delayMs + " ms…";
+      } else if (event.type === "error") {
+        const box = document.createElement("div");
+        box.className = "error";
+        box.textContent = "API Fehler: " + event.message;
+        content.parentNode.appendChild(box);
+      } else if (event.type === "done") {
+        meta = event;
+      }
+      scrollToBottom();
+    };
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text })
+      });
+
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || response.statusText);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data:")) continue;
+          try {
+            handleEvent(JSON.parse(line.slice(5)));
+          } catch {}
+        }
+      }
+    } catch (err) {
+      const box = document.createElement("div");
+      box.className = "error";
+      box.textContent = "Fehler: " + err.message;
+      content.parentNode.appendChild(box);
+    }
+
+    cursor.remove();
+    content.innerHTML = renderMarkdown(answer);
+
+    const metaEl = document.createElement("div");
+    metaEl.className = "meta";
+    const metaParts = [];
+    if (meta && meta.aborted) metaParts.push("Antwort abgebrochen");
+    if (meta && meta.usage) {
+      metaParts.push(meta.usage.totalTokens.toLocaleString("de-DE") + " Tokens");
+      metaParts.push("Schätzung " + formatUsd(meta.usage.costUsd));
+      if (meta.usage.latencyMs) metaParts.push(meta.usage.latencyMs + " ms");
+    }
+    if (metaParts.length) {
+      metaEl.textContent = metaParts.join(" · ");
+      content.parentNode.appendChild(metaEl);
+    }
+
+    setBusy(false);
+    scrollToBottom();
+    el.input.focus();
+  }
+
+  async function abortRequest() {
+    try { await postJson("/api/abort"); } catch {}
+  }
+
+  el.sendBtn.addEventListener("click", sendMessage);
+  el.stopBtn.addEventListener("click", abortRequest);
+
+  el.input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && busy) abortRequest();
+  });
+  el.input.addEventListener("input", () => {
+    el.input.style.height = "auto";
+    el.input.style.height = Math.min(el.input.scrollHeight, 200) + "px";
+  });
+
+  el.modelSelect.addEventListener("change", async () => {
+    try {
+      const state = await postJson("/api/model", { model: el.modelSelect.value });
+      applyState(state);
+    } catch (err) {
+      alert(err.message);
+      loadState();
+    }
+  });
+
+  el.clearBtn.addEventListener("click", async () => {
+    if (!confirm("Verlauf wirklich leeren?")) return;
+    try {
+      applyState(await postJson("/api/clear"));
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  el.systemBtn.addEventListener("click", async () => {
+    const value = prompt("System Prompt (leer = kein System Prompt):", currentSystemPrompt);
+    if (value === null) return;
+    try {
+      applyState(await postJson("/api/system", { system: value }));
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  loadState().catch((err) => {
+    el.status.textContent = "Status konnte nicht geladen werden: " + err.message;
+  });
+  el.input.focus();
+})();
+</script>
+</body>
+</html>

@@ -27,6 +27,9 @@ test("parseCliArgs returns defaults", () => {
     resume: false,
     noSave: false,
     debug: false,
+    web: false,
+    port: null,
+    noOpen: false,
     inferenceOverrides: {}
   });
 });
@@ -55,7 +58,11 @@ test("parseCliArgs parses supported options", () => {
     "5",
     "--resume",
     "--no-save",
-    "--debug"
+    "--debug",
+    "--web",
+    "--port",
+    "8080",
+    "--no-open"
   ]), {
     help: false,
     version: false,
@@ -71,6 +78,9 @@ test("parseCliArgs parses supported options", () => {
     resume: true,
     noSave: true,
     debug: true,
+    web: true,
+    port: 8080,
+    noOpen: true,
     inferenceOverrides: {
       maxTokens: 512,
       temperature: 0.2,
@@ -104,4 +114,6 @@ test("parseCliArgs rejects invalid options", () => {
   assert.throws(() => parseCliArgs(["--max-tokens", "0"]), /Ungueltiger Wert/);
   assert.throws(() => parseCliArgs(["--temperature", "2"]), /Ungueltiger Wert/);
   assert.throws(() => parseCliArgs(["--top-p", "1.5"]), /Ungueltiger Wert/);
+  assert.throws(() => parseCliArgs(["--port", "0"]), /Ungueltiger Wert/);
+  assert.throws(() => parseCliArgs(["--port", "70000"]), /Ungueltiger Wert/);
 });

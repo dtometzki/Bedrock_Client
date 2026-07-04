@@ -90,7 +90,10 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
         "max-turns": { type: "string" },
         resume: { type: "boolean" },
         "no-save": { type: "boolean" },
-        debug: { type: "boolean" }
+        debug: { type: "boolean" },
+        web: { type: "boolean" },
+        port: { type: "string" },
+        "no-open": { type: "boolean" }
       }
     });
   } catch (err) {
@@ -114,6 +117,11 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     min: 0,
     integer: true
   }) ?? DEFAULT_MAX_HISTORY_TURNS;
+  const port = parseNumberOption("port", values.port, {
+    min: 1,
+    max: 65535,
+    integer: true
+  });
   const stopSequences = normalizeStopSequences(values.stop);
   const inferenceOverrides = {
     ...(values["max-tokens"] != null && { maxTokens }),
@@ -137,6 +145,9 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     resume: Boolean(values.resume),
     noSave: Boolean(values["no-save"]),
     debug: Boolean(values.debug),
+    web: Boolean(values.web),
+    port,
+    noOpen: Boolean(values["no-open"]),
     inferenceOverrides
   };
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0 - 2026-07-04
+
+- Add a local web GUI started with `--web` (optional `--port`, default 3456): browser chat with streamed responses, Markdown rendering, collapsible reasoning, model switching, system-prompt editing, history clearing and per-response token/cost estimates.
+- Open the default browser automatically when the web GUI starts (macOS, Windows, Linux); `--no-open` disables this.
+- Serve the GUI from a built-in HTTP server bound to `127.0.0.1` that reuses the existing Bedrock streaming, retry, session and usage modules; credentials stay server-side.
+- Support `Esc`/stop button to abort a streaming response in the browser; aborted answers are marked incomplete like in the CLI.
+- Apply `--resume`, `--profile`, `--region`, `--system`, `--max-turns` and `--no-save` to the web mode as well.
+- Add tests for the web server endpoints, SSE streaming, error handling, model switching and history trimming.
+
 ## 1.6.0 - 2026-07-03
 
 - Restore the previously used model automatically when resuming a session with `--resume`.

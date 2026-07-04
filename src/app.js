@@ -35,6 +35,7 @@ import {
 } from "./bedrock.js";
 import { createStreamInterruptController, promptForModelSelection, readPrompt } from "./prompt.js";
 import { exportHistoryToMarkdown } from "./export.js";
+import { DEFAULT_WEB_PORT, openInBrowser, startWebServer } from "./web-server.js";
 import { formatLine, resetResponseFormatting } from "./response-format.js";
 import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
 
@@ -130,6 +131,9 @@ export async function main() {
       console.log("  --resume            Letzten gespeicherten Verlauf fortsetzen");
       console.log("  --no-save           Verlauf nicht automatisch speichern");
       console.log("  --debug             Debug-Ausgabe fuer Bedrock Requests aktivieren");
+      console.log("  --web               Chat als lokale Web-GUI im Browser starten");
+      console.log(`  --port <n>          Port fuer die Web-GUI (Standard ${DEFAULT_WEB_PORT})`);
+      console.log("  --no-open           Web-GUI nicht automatisch im Browser oeffnen");
       console.log("  -v, --version      Version anzeigen");
       console.log("  -h, --help          Hilfe anzeigen\n");
       console.log("Commands:");
@@ -160,7 +164,7 @@ export async function main() {
     });
     let modelId = activeModel.id;
 
-    if (!cliArgs.model && !resumeModelId && !lastModelId && models.length > 1) {
+    if (!cliArgs.web && !cliArgs.model && !resumeModelId && !lastModelId && models.length > 1) {
       const selected = await promptForModelSelection(models, modelId);
       if (selected) {
         modelId = selected.id;
@@ -222,6 +226,29 @@ export async function main() {
         console.log(`${ANSI.gray}Kein gespeicherter Verlauf gefunden.${ANSI.reset}`);
         console.log(terminalLine());
       }
+    }
+
+    if (cliArgs.web) {
+      const { url } = await startWebServer({
+        models,
+        model: currentModel,
+        client: bedrockClient,
+        inferenceOverrides: activeInferenceOverrides,
+        systemPrompt,
+        region,
+        identityLabel,
+        profile: process.env.AWS_PROFILE || "default",
+        maxTurns: cliArgs.maxTurns,
+        autoSave: autoSaveEnabled,
+        messages,
+        port: cliArgs.port ?? DEFAULT_WEB_PORT
+      });
+      console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${url}`);
+      if (!cliArgs.noOpen) {
+        openInBrowser(url);
+      }
+      console.log(`${ANSI.gray}Beenden mit Ctrl+C.${ANSI.reset}`);
+      return;
     }
 
     while (true) {
