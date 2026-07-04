@@ -239,6 +239,54 @@
   }
   .msg .attachments .filechip { cursor: default; }
   .inputbox.dragover { border-color: var(--accent); }
+
+  #usageOverlay {
+    position: fixed;
+    inset: 0;
+    background: #00000088;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  .modal {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    width: min(560px, calc(100vw - 40px));
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-strong);
+  }
+  .modal-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    font-size: 14px;
+  }
+  .modal-body h3 {
+    margin: 14px 0 6px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  .modal-body h3:first-child { margin-top: 0; }
+  .modal-body table { width: 100%; border-collapse: collapse; }
+  .modal-body td {
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .modal-body td:last-child { text-align: right; color: var(--text); }
+  .modal-body td:first-child { color: var(--text-dim); padding-right: 16px; }
+  .modal-body .note { color: var(--text-dim); font-size: 12px; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -248,9 +296,20 @@
   <select id="modelSelect" title="Modell wechseln"></select>
   <span class="spacer"></span>
   <span class="chip" id="accountChip">–</span>
+  <button id="usageBtn" title="Kosten und Token-Nutzung anzeigen">Usage</button>
   <button id="systemBtn" title="System Prompt anzeigen/ändern">System</button>
   <button id="clearBtn" title="Verlauf leeren">Verlauf leeren</button>
 </header>
+
+<div id="usageOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-head">
+      <strong>Usage</strong>
+      <button id="usageCloseBtn">Schließen</button>
+    </div>
+    <div class="modal-body" id="usageBody">Lade…</div>
+  </div>
+</div>
 
 <main id="main">
   <div class="container" id="messages">
@@ -295,7 +354,11 @@
     attachBtn: document.getElementById("attachBtn"),
     fileInput: document.getElementById("fileInput"),
     attachRow: document.getElementById("attachRow"),
-    inputbox: document.getElementById("inputbox")
+    inputbox: document.getElementById("inputbox"),
+    usageBtn: document.getElementById("usageBtn"),
+    usageOverlay: document.getElementById("usageOverlay"),
+    usageBody: document.getElementById("usageBody"),
+    usageCloseBtn: document.getElementById("usageCloseBtn")
   };
 
   const MAX_ATTACHMENTS = 5;
@@ -575,8 +638,95 @@
     try { await postJson("/api/abort"); } catch {}
   }
 
+  function formatInt(value) {
+    return Number(value || 0).toLocaleString("de-DE");
+  }
+
+  function usageRow(label, value) {
+    const row = document.createElement("tr");
+    const labelCell = document.createElement("td");
+    labelCell.textContent = label;
+    const valueCell = document.createElement("td");
+    valueCell.textContent = value;
+    row.append(labelCell, valueCell);
+    return row;
+  }
+
+  function usageSection(title, rows) {
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const table = document.createElement("table");
+    rows.forEach((row) => table.appendChild(row));
+    return [heading, table];
+  }
+
+  function renderUsage(data) {
+    el.usageBody.innerHTML = "";
+    const billing = data.billing || {};
+    const session = data.session || {};
+
+    const billingRows = billing.error
+      ? [usageRow("Kosten", "n/a"), usageRow("Hinweis", billing.error.split("\n")[0])]
+      : [
+          usageRow("Kosten", formatUsd(billing.amount) + " " + (billing.unit || "USD") +
+            (billing.estimated ? " (AWS Estimated)" : "")),
+          usageRow("Zeitraum", billing.period ? billing.period.label : "–")
+        ];
+    el.usageBody.append(...usageSection("AWS Billing (Bedrock, aktueller Monat)", billingRows));
+
+    if (!session.requests) {
+      const note = document.createElement("p");
+      note.textContent = "Noch keine Bedrock-Nutzung in dieser Session.";
+      el.usageBody.appendChild(note);
+    } else {
+      if (session.last) {
+        el.usageBody.append(...usageSection("Letzte Antwort (" + session.last.modelLabel + ")", [
+          usageRow("Input", formatInt(session.last.inputTokens) + " Tokens"),
+          usageRow("Output", formatInt(session.last.outputTokens) + " Tokens"),
+          usageRow("Gesamt", formatInt(session.last.totalTokens) + " Tokens"),
+          usageRow("Schätzung", formatUsd(session.last.costUsd)),
+          usageRow("Latenz", session.last.latencyMs ? session.last.latencyMs + " ms" : "n/a")
+        ]));
+      }
+      el.usageBody.append(...usageSection("Session (" + formatInt(session.requests) + " Requests)", [
+        usageRow("Input", formatInt(session.inputTokens) + " Tokens"),
+        usageRow("Output", formatInt(session.outputTokens) + " Tokens"),
+        usageRow("Gesamt", formatInt(session.totalTokens) + " Tokens"),
+        usageRow("Schätzung", formatUsd(session.costUsd))
+      ]));
+      if (session.byModel && session.byModel.length > 1) {
+        el.usageBody.append(...usageSection("Nach Modell", session.byModel.map((entry) =>
+          usageRow(entry.modelLabel, formatInt(entry.totalTokens) + " Tokens, " +
+            formatUsd(entry.costUsd) + (entry.hasUnknownCost ? "+" : ""))
+        )));
+      }
+    }
+
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "Session-Kosten sind eine Token-Schätzung; AWS Billing ist der Cost-Explorer-Wert für Amazon Bedrock.";
+    el.usageBody.appendChild(note);
+  }
+
+  async function openUsage() {
+    el.usageOverlay.style.display = "";
+    el.usageBody.textContent = "Lade… (AWS Cost Explorer kann einige Sekunden brauchen)";
+    try {
+      const response = await fetch("/api/usage");
+      if (!response.ok) throw new Error(response.statusText);
+      renderUsage(await response.json());
+    } catch (err) {
+      el.usageBody.textContent = "Usage konnte nicht geladen werden: " + err.message;
+    }
+  }
+
   el.sendBtn.addEventListener("click", sendMessage);
   el.stopBtn.addEventListener("click", abortRequest);
+  el.usageBtn.addEventListener("click", openUsage);
+  el.usageCloseBtn.addEventListener("click", () => { el.usageOverlay.style.display = "none"; });
+  el.usageOverlay.addEventListener("click", (event) => {
+    if (event.target === el.usageOverlay) el.usageOverlay.style.display = "none";
+  });
 
   el.attachBtn.addEventListener("click", () => el.fileInput.click());
   el.fileInput.addEventListener("change", async () => {
@@ -603,7 +753,13 @@
     }
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && busy) abortRequest();
+    if (event.key === "Escape") {
+      if (el.usageOverlay.style.display !== "none") {
+        el.usageOverlay.style.display = "none";
+      } else if (busy) {
+        abortRequest();
+      }
+    }
   });
   el.input.addEventListener("input", () => {
     el.input.style.height = "auto";

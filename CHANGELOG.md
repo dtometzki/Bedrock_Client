@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.0 - 2026-07-04
+
+- Add a "Usage" button to the web GUI that opens a panel with current Amazon Bedrock billing costs from AWS Cost Explorer plus session token usage, per-response stats and a per-model breakdown — the web equivalent of `/usage`.
+- Add a `GET /api/usage` endpoint; Cost Explorer errors (e.g. expired AWS session) are reported in the panel instead of failing the request.
+- Close the usage panel with `Esc`, the close button or a click outside.
+- Add tests for the usage endpoint including billing error handling.
+
 ## 1.8.0 - 2026-07-04
 
 - Add file attachments to the web GUI via a "+" button or drag & drop: documents (pdf, csv, doc, docx, xls, xlsx, html, txt, md) and images (png, jpg, gif, webp) are sent to Bedrock as Converse document/image blocks.

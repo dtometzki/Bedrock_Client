@@ -222,6 +222,51 @@ test("Unbekannte Routen liefern 404", async () => {
   });
 });
 
+test("GET /api/usage liefert Billing und Session-Nutzung", async () => {
+  async function* fakeStream() {
+    yield { type: "text", text: "Antwort" };
+    yield { type: "usage", usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 }, metrics: { latencyMs: 1200 } };
+  }
+  const billingFn = async () => ({
+    amount: 12.34,
+    unit: "USD",
+    estimated: true,
+    period: { label: "2026-07-01 bis 2026-07-05 (exklusiv)" }
+  });
+
+  await withServer({ streamFn: fakeStream, billingFn }, async ({ url }) => {
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+
+    const response = await fetch(`${url}/api/usage`);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+
+    assert.equal(data.billing.amount, 12.34);
+    assert.equal(data.billing.estimated, true);
+    assert.equal(data.session.requests, 1);
+    assert.equal(data.session.totalTokens, 150);
+    assert.equal(data.session.last.latencyMs, 1200);
+    assert.equal(data.session.byModel.length, 1);
+    assert.equal(data.session.byModel[0].totalTokens, 150);
+  });
+});
+
+test("GET /api/usage faengt Billing-Fehler ab", async () => {
+  const billingFn = async () => { throw new Error("Cost Explorer nicht erreichbar"); };
+
+  await withServer({ billingFn }, async ({ url }) => {
+    const response = await fetch(`${url}/api/usage`);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.match(data.billing.error, /Cost Explorer nicht erreichbar/);
+    assert.equal(data.session.requests, 0);
+  });
+});
+
 test("buildAttachmentBlocks erzeugt Dokument- und Bild-Bloecke", () => {
   const data = Buffer.from("Inhalt").toString("base64");
   const { blocks, displayNames } = buildAttachmentBlocks([

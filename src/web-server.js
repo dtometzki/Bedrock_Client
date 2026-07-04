@@ -11,7 +11,7 @@ import { findModel, getModelInvocationId } from "./models.js";
 import { countHistoryTurns, trimMessagesToMaxTurns } from "./history.js";
 import { clearSession, writeSession } from "./session.js";
 import { writeLastModelId } from "./config.js";
-import { addUsageRecord, emptyUsageTotals } from "./usage.js";
+import { addUsageRecord, emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
 
 export const DEFAULT_WEB_PORT = 3456;
 
@@ -193,6 +193,7 @@ export function createWebServer(options = {}) {
     autoSave = false,
     messages: initialMessages = [],
     streamFn = streamConverseWithRetry,
+    billingFn = loadCurrentBedrockBillingCost,
     indexHtmlPath = INDEX_HTML_URL,
     persistModelSelection = true
   } = options;
@@ -238,6 +239,30 @@ export function createWebServer(options = {}) {
         costUsd: state.usageTotals.costUsd
       }
     };
+  }
+
+  async function handleUsage(res) {
+    const billing = await billingFn().catch((err) => ({ error: err.message }));
+    sendJson(res, 200, {
+      billing,
+      session: {
+        requests: state.usageTotals.requests,
+        inputTokens: state.usageTotals.inputTokens,
+        outputTokens: state.usageTotals.outputTokens,
+        totalTokens: state.usageTotals.totalTokens,
+        costUsd: state.usageTotals.costUsd,
+        last: toPublicUsageRecord(state.usageTotals.last),
+        byModel: [...state.usageTotals.byModel.entries()].map(([modelLabel, totals]) => ({
+          modelLabel,
+          requests: totals.requests,
+          inputTokens: totals.inputTokens,
+          outputTokens: totals.outputTokens,
+          totalTokens: totals.totalTokens,
+          costUsd: totals.costUsd,
+          hasUnknownCost: totals.hasUnknownCost
+        }))
+      }
+    });
   }
 
   function handleIndex(res) {
@@ -432,6 +457,7 @@ export function createWebServer(options = {}) {
     const handler = {
       "GET /": () => handleIndex(res),
       "GET /api/state": () => sendJson(res, 200, getStatePayload()),
+      "GET /api/usage": () => handleUsage(res),
       "POST /api/chat": () => handleChat(req, res),
       "POST /api/abort": () => handleAbort(res),
       "POST /api/clear": () => handleClear(res),
