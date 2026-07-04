@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0 - 2026-07-04
+
+- Add file attachments to the web GUI via a "+" button or drag & drop: documents (pdf, csv, doc, docx, xls, xlsx, html, txt, md) and images (png, jpg, gif, webp) are sent to Bedrock as Converse document/image blocks.
+- Show pending attachments as removable chips in the prompt and attached file names in the chat history; a message can also be sent with attachments only.
+- Enforce Converse limits server-side (max. 5 attachments, 4.5 MB each, supported formats, sanitized document names) with clear error messages.
+- Strip attachment binary data when persisting the session; the message text is kept.
+- Add tests for attachment block building, validation and the chat endpoint with attachments.
+
 ## 1.7.0 - 2026-07-04
 
 - Add a local web GUI started with `--web` (optional `--port`, default 3456): browser chat with streamed responses, Markdown rendering, collapsible reasoning, model switching, system-prompt editing, history clearing and per-response token/cost estimates.

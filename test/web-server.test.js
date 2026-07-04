@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getBrowserOpenCommand, openInBrowser, startWebServer } from "../src/web-server.js";
+import {
+  buildAttachmentBlocks,
+  getBrowserOpenCommand,
+  openInBrowser,
+  startWebServer
+} from "../src/web-server.js";
 
 const MODELS = [
   { id: "model-a", label: "Modell A" },
@@ -70,8 +75,8 @@ test("GET /api/state liefert Modelle, aktives Modell und Verlauf", async () => {
     assert.equal(state.systemPrompt, "Testsystem");
     assert.equal(state.turns, 1);
     assert.deepEqual(state.messages, [
-      { role: "user", text: "Hallo" },
-      { role: "assistant", text: "Hi!" }
+      { role: "user", text: "Hallo", attachments: [] },
+      { role: "assistant", text: "Hi!", attachments: [] }
     ]);
   });
 });
@@ -111,8 +116,8 @@ test("POST /api/chat streamt Events und haengt Antwort an den Verlauf an", async
 
     const state = getState();
     assert.deepEqual(state.messages, [
-      { role: "user", text: "Sag hallo" },
-      { role: "assistant", text: "Hallo Welt" }
+      { role: "user", text: "Sag hallo", attachments: [] },
+      { role: "assistant", text: "Hallo Welt", attachments: [] }
     ]);
     assert.equal(state.usage.totalTokens, 15);
     assert.equal(state.busy, false);
@@ -214,6 +219,95 @@ test("Unbekannte Routen liefern 404", async () => {
   await withServer({}, async ({ url }) => {
     const response = await fetch(`${url}/api/unbekannt`);
     assert.equal(response.status, 404);
+  });
+});
+
+test("buildAttachmentBlocks erzeugt Dokument- und Bild-Bloecke", () => {
+  const data = Buffer.from("Inhalt").toString("base64");
+  const { blocks, displayNames } = buildAttachmentBlocks([
+    { name: "bericht 2026.pdf", dataBase64: data },
+    { name: "foto.jpg", dataBase64: data }
+  ]);
+
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].document.format, "pdf");
+  assert.equal(blocks[0].document.name, "bericht 2026");
+  assert.ok(Buffer.isBuffer(blocks[0].document.source.bytes));
+  assert.equal(blocks[1].image.format, "jpeg");
+  assert.deepEqual(displayNames, ["bericht 2026.pdf", "foto.jpg"]);
+});
+
+test("buildAttachmentBlocks bereinigt unerlaubte Zeichen im Dokumentnamen", () => {
+  const data = Buffer.from("x").toString("base64");
+  const { blocks } = buildAttachmentBlocks([{ name: "Kosten_Übersicht  v2!.md", dataBase64: data }]);
+  assert.match(blocks[0].document.name, /^[a-zA-Z0-9 \-()[\]]+$/);
+  assert.ok(!/\s{2,}/.test(blocks[0].document.name));
+});
+
+test("buildAttachmentBlocks lehnt unbekannte Typen, leere und zu grosse Dateien ab", () => {
+  const data = Buffer.from("x").toString("base64");
+  assert.match(buildAttachmentBlocks([{ name: "app.exe", dataBase64: data }]).error, /nicht unterstuetzt/);
+  assert.match(buildAttachmentBlocks([{ name: "leer.txt", dataBase64: "" }]).error, /ohne Inhalt/);
+
+  const big = Buffer.alloc(4_500_001).toString("base64");
+  assert.match(buildAttachmentBlocks([{ name: "gross.pdf", dataBase64: big }]).error, /zu gross/);
+
+  const many = Array.from({ length: 6 }, (_, i) => ({ name: `d${i}.txt`, dataBase64: data }));
+  assert.match(buildAttachmentBlocks(many).error, /Zu viele Anhaenge/);
+});
+
+test("POST /api/chat sendet Anhaenge als Content-Bloecke an Bedrock", async () => {
+  const receivedParams = [];
+  async function* fakeStream(client, params) {
+    receivedParams.push(params);
+    yield { type: "text", text: "Zusammenfassung" };
+  }
+
+  await withServer({ streamFn: fakeStream }, async ({ url, getState }) => {
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Fasse das zusammen",
+        attachments: [{ name: "notizen.txt", dataBase64: Buffer.from("Notizen").toString("base64") }]
+      })
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+
+    const sentContent = receivedParams[0].messages.at(-1).content;
+    assert.equal(sentContent[0].text, "Fasse das zusammen");
+    assert.equal(sentContent[1].document.format, "txt");
+    assert.equal(sentContent[1].document.source.bytes.toString("utf8"), "Notizen");
+
+    const lastUser = getState().messages.at(-2);
+    assert.deepEqual(lastUser.attachments, ["notizen.txt"]);
+  });
+});
+
+test("POST /api/chat akzeptiert Anhang ohne Text und lehnt ungueltige Anhaenge ab", async () => {
+  async function* fakeStream() {
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({ streamFn: fakeStream }, async ({ url }) => {
+    const onlyAttachment = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "",
+        attachments: [{ name: "daten.csv", dataBase64: Buffer.from("a;b").toString("base64") }]
+      })
+    });
+    assert.equal(onlyAttachment.status, 200);
+    await onlyAttachment.text();
+
+    const { response, data } = await postJson(`${url}/api/chat`, {
+      message: "Hallo",
+      attachments: [{ name: "virus.exe", dataBase64: Buffer.from("x").toString("base64") }]
+    });
+    assert.equal(response.status, 400);
+    assert.match(data.error, /nicht unterstuetzt/);
   });
 });
 

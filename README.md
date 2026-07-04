@@ -149,7 +149,7 @@ node app_aws.js --web --no-open
 
 The default browser opens automatically with the GUI (default `http://127.0.0.1:3456`); `--no-open` disables that and only prints the URL.
 
-The web GUI supports streaming responses with Markdown rendering, model switching, collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, and per-response token/cost estimates. CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
+The web GUI supports streaming responses with Markdown rendering, model switching, collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, per-response token/cost estimates, and file attachments via the "+" button or drag & drop (documents: pdf, csv, doc, docx, xls, xlsx, html, txt, md; images: png, jpg, gif, webp; max. 5 files, 4.5 MB each). CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
 
 Notes:
 

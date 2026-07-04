@@ -189,6 +189,56 @@
     flex: 1;
     padding-left: 6px;
   }
+
+  .attachrow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 6px 4px;
+  }
+  .attachrow:empty { display: none; }
+  .filechip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    max-width: 260px;
+  }
+  .filechip .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .filechip .remove {
+    cursor: pointer;
+    color: var(--text-dim);
+    font-weight: 700;
+    padding: 0 2px;
+  }
+  .filechip .remove:hover { color: var(--text); }
+  #attachBtn {
+    border-radius: 999px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .msg .attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 6px;
+  }
+  .msg .attachments .filechip { cursor: default; }
+  .inputbox.dragover { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -212,9 +262,13 @@
 </main>
 
 <footer>
-  <div class="inputbox">
+  <div class="inputbox" id="inputbox">
+    <div class="attachrow" id="attachRow"></div>
     <textarea id="input" rows="2" placeholder="Nachricht an Bedrock…"></textarea>
     <div class="inputrow">
+      <button id="attachBtn" title="Dateien anhängen (PDF, Office, Text, Bilder)">+</button>
+      <input type="file" id="fileInput" multiple style="display:none"
+             accept=".pdf,.csv,.doc,.docx,.xls,.xlsx,.html,.htm,.txt,.md,.png,.jpg,.jpeg,.gif,.webp">
       <span class="statusline" id="status"></span>
       <button id="stopBtn" style="display:none">Stopp (Esc)</button>
       <button id="sendBtn" class="primary">Senden</button>
@@ -237,11 +291,19 @@
     systemBtn: document.getElementById("systemBtn"),
     modelSelect: document.getElementById("modelSelect"),
     accountChip: document.getElementById("accountChip"),
-    status: document.getElementById("status")
+    status: document.getElementById("status"),
+    attachBtn: document.getElementById("attachBtn"),
+    fileInput: document.getElementById("fileInput"),
+    attachRow: document.getElementById("attachRow"),
+    inputbox: document.getElementById("inputbox")
   };
+
+  const MAX_ATTACHMENTS = 5;
+  const MAX_ATTACHMENT_BYTES = 4.5 * 1000 * 1000;
 
   let busy = false;
   let currentSystemPrompt = "";
+  let pendingAttachments = [];
 
   function renderMarkdown(text) {
     if (window.marked && window.DOMPurify) {
@@ -260,16 +322,72 @@
     if (el.empty) { el.empty.remove(); el.empty = null; }
   }
 
-  function addUserMessage(text) {
+  function addUserMessage(text, attachmentNames) {
     hideEmpty();
     const wrap = document.createElement("div");
     wrap.className = "msg user";
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    bubble.textContent = text;
+    bubble.textContent = text || "(nur Anhang)";
     wrap.appendChild(bubble);
+    if (attachmentNames && attachmentNames.length) {
+      const row = document.createElement("div");
+      row.className = "attachments";
+      attachmentNames.forEach((name) => {
+        const chip = document.createElement("span");
+        chip.className = "filechip";
+        chip.innerHTML = "📎 <span class=\"name\"></span>";
+        chip.querySelector(".name").textContent = name;
+        row.appendChild(chip);
+      });
+      bubble.after(row);
+    }
     el.messages.appendChild(wrap);
     scrollToBottom();
+  }
+
+  function renderAttachRow() {
+    el.attachRow.innerHTML = "";
+    pendingAttachments.forEach((attachment, index) => {
+      const chip = document.createElement("span");
+      chip.className = "filechip";
+      chip.innerHTML = "📎 <span class=\"name\"></span><span class=\"remove\" title=\"Entfernen\">×</span>";
+      chip.querySelector(".name").textContent = attachment.name;
+      chip.querySelector(".remove").addEventListener("click", () => {
+        pendingAttachments.splice(index, 1);
+        renderAttachRow();
+      });
+      el.attachRow.appendChild(chip);
+    });
+  }
+
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+      reader.onerror = () => reject(new Error("Datei konnte nicht gelesen werden: " + file.name));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function addFiles(fileList) {
+    for (const file of fileList) {
+      if (pendingAttachments.length >= MAX_ATTACHMENTS) {
+        alert("Maximal " + MAX_ATTACHMENTS + " Anhänge pro Nachricht.");
+        break;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        alert("Datei zu groß (max. 4,5 MB): " + file.name);
+        continue;
+      }
+      try {
+        const dataBase64 = await readFileAsBase64(file);
+        pendingAttachments.push({ name: file.name, dataBase64 });
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+    renderAttachRow();
   }
 
   function addAssistantMessage() {
@@ -314,7 +432,7 @@
     if (state.messages.length) hideEmpty();
     state.messages.forEach((message) => {
       if (message.role === "user") {
-        addUserMessage(message.text);
+        addUserMessage(message.text, message.attachments);
       } else {
         const { content } = addAssistantMessage();
         content.innerHTML = renderMarkdown(message.text);
@@ -341,12 +459,15 @@
 
   async function sendMessage() {
     const text = el.input.value.trim();
-    if (!text || busy) return;
+    if ((!text && !pendingAttachments.length) || busy) return;
 
+    const attachments = pendingAttachments;
+    pendingAttachments = [];
+    renderAttachRow();
     el.input.value = "";
     el.input.style.height = "auto";
     setBusy(true);
-    addUserMessage(text);
+    addUserMessage(text, attachments.map((attachment) => attachment.name));
 
     const { content } = addAssistantMessage();
     const cursor = document.createElement("span");
@@ -395,7 +516,7 @@
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text })
+        body: JSON.stringify({ message: text, attachments: attachments })
       });
 
       if (!response.ok || !response.body) {
@@ -456,6 +577,24 @@
 
   el.sendBtn.addEventListener("click", sendMessage);
   el.stopBtn.addEventListener("click", abortRequest);
+
+  el.attachBtn.addEventListener("click", () => el.fileInput.click());
+  el.fileInput.addEventListener("change", async () => {
+    await addFiles(Array.from(el.fileInput.files));
+    el.fileInput.value = "";
+  });
+  el.inputbox.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    el.inputbox.classList.add("dragover");
+  });
+  el.inputbox.addEventListener("dragleave", () => el.inputbox.classList.remove("dragover"));
+  el.inputbox.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    el.inputbox.classList.remove("dragover");
+    if (event.dataTransfer?.files?.length) {
+      await addFiles(Array.from(event.dataTransfer.files));
+    }
+  });
 
   el.input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {

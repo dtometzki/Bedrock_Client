@@ -17,6 +17,95 @@ export const DEFAULT_WEB_PORT = 3456;
 
 const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_CHAT_BODY_BYTES = 40_000_000;
+
+export const MAX_ATTACHMENTS = 5;
+export const MAX_ATTACHMENT_BYTES = 4_500_000;
+
+// Von Bedrock Converse unterstuetzte Formate.
+const DOCUMENT_FORMATS = {
+  pdf: "pdf", csv: "csv", doc: "doc", docx: "docx",
+  xls: "xls", xlsx: "xlsx", html: "html", htm: "html",
+  txt: "txt", md: "md"
+};
+const IMAGE_FORMATS = { png: "png", jpg: "jpeg", jpeg: "jpeg", gif: "gif", webp: "webp" };
+
+function sanitizeDocumentName(name) {
+  // Converse erlaubt in Dokumentnamen nur Alphanumerik, Leerzeichen,
+  // Bindestriche und Klammern – ohne aufeinanderfolgende Leerzeichen.
+  const base = String(name || "dokument").replace(/\.[^.]+$/, "");
+  const cleaned = base
+    .replace(/[^a-zA-Z0-9 \-()[\]]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "dokument";
+}
+
+export function buildAttachmentBlock(attachment) {
+  const name = String(attachment?.name || "");
+  const extension = (name.match(/\.([^.]+)$/)?.[1] || "").toLowerCase();
+  const dataBase64 = String(attachment?.dataBase64 || "");
+
+  if (!dataBase64) {
+    return { error: `Anhang ohne Inhalt: ${name || "unbenannt"}` };
+  }
+
+  let bytes;
+  try {
+    bytes = Buffer.from(dataBase64, "base64");
+  } catch {
+    return { error: `Anhang konnte nicht dekodiert werden: ${name}` };
+  }
+  if (!bytes.length) {
+    return { error: `Anhang ohne Inhalt: ${name || "unbenannt"}` };
+  }
+  if (bytes.length > MAX_ATTACHMENT_BYTES) {
+    return { error: `Anhang zu gross (max. 4,5 MB): ${name}` };
+  }
+
+  if (IMAGE_FORMATS[extension]) {
+    return {
+      block: { image: { format: IMAGE_FORMATS[extension], source: { bytes } } },
+      displayName: name
+    };
+  }
+  if (DOCUMENT_FORMATS[extension]) {
+    return {
+      block: {
+        document: {
+          format: DOCUMENT_FORMATS[extension],
+          name: sanitizeDocumentName(name),
+          source: { bytes }
+        }
+      },
+      displayName: name
+    };
+  }
+
+  const supported = [...new Set([...Object.keys(DOCUMENT_FORMATS), ...Object.keys(IMAGE_FORMATS)])].join(", ");
+  return { error: `Dateityp nicht unterstuetzt: ${name} (unterstuetzt: ${supported})` };
+}
+
+export function buildAttachmentBlocks(attachments) {
+  if (!Array.isArray(attachments) || !attachments.length) {
+    return { blocks: [], displayNames: [] };
+  }
+  if (attachments.length > MAX_ATTACHMENTS) {
+    return { error: `Zu viele Anhaenge (max. ${MAX_ATTACHMENTS}).` };
+  }
+
+  const blocks = [];
+  const displayNames = [];
+  for (const attachment of attachments) {
+    const result = buildAttachmentBlock(attachment);
+    if (result.error) {
+      return { error: result.error };
+    }
+    blocks.push(result.block);
+    displayNames.push(result.displayName);
+  }
+  return { blocks, displayNames };
+}
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -55,8 +144,27 @@ export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
 function toPublicMessages(messages) {
   return messages.map((message) => ({
     role: message.role,
-    text: message.content?.[0]?.text ?? ""
+    text: message.content?.find((block) => typeof block.text === "string")?.text ?? "",
+    attachments: message.attachmentNames ?? (message.content ?? [])
+      .filter((block) => block.document || block.image)
+      .map((block) => block.document?.name || "Bild")
   }));
+}
+
+function toBedrockMessages(messages) {
+  // attachmentNames ist nur fuer die Anzeige gedacht und wird nicht an Bedrock gesendet.
+  return messages.map(({ role, content }) => ({ role, content }));
+}
+
+function toPersistableMessages(messages) {
+  // Session-Dateien speichern nur Text-Bloecke; Anhaenge (Binaerdaten)
+  // werden beim Persistieren entfernt, der Nachrichtentext bleibt erhalten.
+  return messages
+    .map((message) => ({
+      role: message.role,
+      content: (message.content ?? []).filter((block) => typeof block.text === "string")
+    }))
+    .filter((message) => message.content.length);
 }
 
 function toPublicUsageRecord(record) {
@@ -105,7 +213,7 @@ export function createWebServer(options = {}) {
 
   function persistSession() {
     if (autoSave) {
-      writeSession(state.messages, { modelId: state.model.id });
+      writeSession(toPersistableMessages(state.messages), { modelId: state.model.id });
     }
   }
 
@@ -203,14 +311,19 @@ export function createWebServer(options = {}) {
 
     let body;
     try {
-      body = await readJsonBody(req);
+      body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
     } catch (err) {
       sendJson(res, 400, { error: err.message });
       return;
     }
 
     const message = String(body?.message ?? "").trim();
-    if (!message) {
+    const attachmentResult = buildAttachmentBlocks(body?.attachments);
+    if (attachmentResult.error) {
+      sendJson(res, 400, { error: attachmentResult.error });
+      return;
+    }
+    if (!message && !attachmentResult.blocks.length) {
       sendJson(res, 400, { error: "Leere Nachricht." });
       return;
     }
@@ -233,7 +346,14 @@ export function createWebServer(options = {}) {
       }
     });
 
-    const userMessage = { role: "user", content: [{ text: message }] };
+    const userMessage = {
+      role: "user",
+      content: [
+        ...(message ? [{ text: message }] : []),
+        ...attachmentResult.blocks
+      ],
+      ...(attachmentResult.displayNames.length && { attachmentNames: attachmentResult.displayNames })
+    };
     const requestMessages = [...state.messages, userMessage];
 
     let fullResponse = "";
@@ -244,7 +364,7 @@ export function createWebServer(options = {}) {
     try {
       for await (const event of streamFn(client, {
         modelId: getModelInvocationId(state.model),
-        messages: requestMessages,
+        messages: toBedrockMessages(requestMessages),
         system: state.systemPrompt || undefined,
         inferenceConfig: state.inferenceConfig,
         abortSignal: abortController.signal
