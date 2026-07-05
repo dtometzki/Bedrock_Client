@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildAdaptiveThinkingFields,
   buildInferenceConfig,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
@@ -56,6 +57,55 @@ test("buildInferenceConfig applies topP and stopSequences overrides", () => {
 
   const withoutStop = buildInferenceConfig({}, { stopSequences: [] });
   assert.equal("stopSequences" in withoutStop, false);
+});
+
+test("buildAdaptiveThinkingFields maps effort per request style or nothing", () => {
+  // Standard-Stil (Opus 4.6, Sonnet 4.6): effort steckt in thinking.
+  assert.deepEqual(buildAdaptiveThinkingFields("low"), { thinking: { type: "adaptive", effort: "low" } });
+  assert.deepEqual(
+    buildAdaptiveThinkingFields("high", "thinking"),
+    { thinking: { type: "adaptive", effort: "high" } }
+  );
+  // output_config-Stil (Opus 4.8, Sonnet 5, Fable 5): effort separat.
+  assert.deepEqual(
+    buildAdaptiveThinkingFields("medium", "output_config"),
+    { thinking: { type: "adaptive" }, output_config: { effort: "medium" } }
+  );
+  assert.equal(buildAdaptiveThinkingFields(null), undefined);
+  assert.equal(buildAdaptiveThinkingFields("", "output_config"), undefined);
+});
+
+test("streamConverse forwards additionalModelRequestFields when present", async () => {
+  let sentCommand;
+  const client = {
+    async send(command) {
+      sentCommand = command;
+      return { stream: streamFrom([{ contentBlockDelta: { delta: { text: "ok" } } }]) };
+    }
+  };
+
+  for await (const event of streamConverse(client, {
+    modelId: "model-a",
+    messages: [],
+    additionalModelRequestFields: { thinking: { type: "adaptive", effort: "high" } }
+  })) {
+    void event;
+  }
+  assert.deepEqual(sentCommand.input.additionalModelRequestFields, {
+    thinking: { type: "adaptive", effort: "high" }
+  });
+
+  let plainCommand;
+  const plainClient = {
+    async send(command) {
+      plainCommand = command;
+      return { stream: streamFrom([{ contentBlockDelta: { delta: { text: "ok" } } }]) };
+    }
+  };
+  for await (const event of streamConverse(plainClient, { modelId: "model-a", messages: [] })) {
+    void event;
+  }
+  assert.equal("additionalModelRequestFields" in plainCommand.input, false);
 });
 
 test("isRetryableError recognizes throttling, status codes and retryable flags", () => {

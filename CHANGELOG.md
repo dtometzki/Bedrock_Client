@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.0 - 2026-07-05
+
+- Add an "Effort" dropdown to the web GUI (next to the model selector) that controls adaptive-thinking depth for reasoning models via `low`/`medium`/`high` (Opus additionally `max`).
+- Send the effort level to Bedrock as `additionalModelRequestFields` with two request shapes depending on the model generation: `thinking.effort` for Claude Opus 4.6 / Sonnet 4.6, and a separate `output_config.effort` (with `thinking.type: "adaptive"`) for Claude Opus 4.8 / Sonnet 5 / Fable 5.
+- Configure effort per model in [`models.json`](./models.json) via an `effort` object (`levels`, `default`, optional `style: "output_config"`); models without it hide the dropdown and send no thinking fields.
+- Add `POST /api/effort`, expose per-model effort options and the current selection in `GET /api/state`, and reset the effort to the model default on model switch.
+- Refactor `src/app.js`: extract `streamModelResponse`/`rememberPrompt` helpers and drive debug toggles from shared truthy/falsy sets.
+- Add tests for the effort endpoint, both request shapes, `normalizeEffort` and the `additionalModelRequestFields` passthrough.
+
 ## 1.9.1 - 2026-07-05
 
 - Harden the web GUI against DNS rebinding and cross-origin (CSRF) requests: reject requests whose `Host` header is not a localhost name and, when an `Origin` header is present, require it to match the host.

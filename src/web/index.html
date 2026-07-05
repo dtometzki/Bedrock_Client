@@ -294,6 +294,7 @@
   <span class="logo">✳</span>
   <span class="title">Bedrock Chat</span>
   <select id="modelSelect" title="Modell wechseln"></select>
+  <select id="effortSelect" title="Effort Level (Denk-Aufwand)"></select>
   <span class="spacer"></span>
   <span class="chip" id="accountChip">–</span>
   <button id="usageBtn" title="Kosten und Token-Nutzung anzeigen">Usage</button>
@@ -349,6 +350,7 @@
     clearBtn: document.getElementById("clearBtn"),
     systemBtn: document.getElementById("systemBtn"),
     modelSelect: document.getElementById("modelSelect"),
+    effortSelect: document.getElementById("effortSelect"),
     accountChip: document.getElementById("accountChip"),
     status: document.getElementById("status"),
     attachBtn: document.getElementById("attachBtn"),
@@ -363,10 +365,12 @@
 
   const MAX_ATTACHMENTS = 5;
   const MAX_ATTACHMENT_BYTES = 4.5 * 1000 * 1000;
+  const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", max: "Max" };
 
   let busy = false;
   let currentSystemPrompt = "";
   let pendingAttachments = [];
+  let effortSupported = false;
 
   function renderMarkdown(text) {
     if (window.marked && window.DOMPurify) {
@@ -469,6 +473,7 @@
     el.sendBtn.disabled = value;
     el.stopBtn.style.display = value ? "" : "none";
     el.modelSelect.disabled = value;
+    el.effortSelect.disabled = value || !effortSupported;
     el.clearBtn.disabled = value;
     el.systemBtn.disabled = value;
     if (!value) el.status.textContent = "";
@@ -476,6 +481,32 @@
 
   function formatUsd(value) {
     return value == null ? "n/a" : "$" + value.toFixed(4);
+  }
+
+  function applyEffort(state) {
+    const model = state.models.find((entry) => entry.id === state.modelId);
+    const config = model && model.effort;
+    el.effortSelect.innerHTML = "";
+    effortSupported = Boolean(config);
+
+    if (!config) {
+      const option = document.createElement("option");
+      option.textContent = "Effort n/a";
+      el.effortSelect.appendChild(option);
+      el.effortSelect.disabled = true;
+      el.effortSelect.title = "Dieses Modell unterstützt kein Effort Level";
+      return;
+    }
+
+    el.effortSelect.title = "Effort Level (Denk-Aufwand)";
+    config.levels.forEach((level) => {
+      const option = document.createElement("option");
+      option.value = level;
+      option.textContent = "Effort: " + (EFFORT_LABELS[level] || level);
+      option.selected = level === state.effort;
+      el.effortSelect.appendChild(option);
+    });
+    el.effortSelect.disabled = busy;
   }
 
   function applyState(state) {
@@ -487,6 +518,7 @@
       option.selected = model.id === state.modelId;
       el.modelSelect.appendChild(option);
     });
+    applyEffort(state);
     const account = [state.profile, state.region, state.identityLabel]
       .filter(Boolean).join(" · ");
     el.accountChip.textContent = account || "–";
@@ -770,6 +802,15 @@
     try {
       const state = await postJson("/api/model", { model: el.modelSelect.value });
       applyState(state);
+    } catch (err) {
+      alert(err.message);
+      loadState();
+    }
+  });
+
+  el.effortSelect.addEventListener("change", async () => {
+    try {
+      applyState(await postJson("/api/effort", { effort: el.effortSelect.value }));
     } catch (err) {
       alert(err.message);
       loadState();

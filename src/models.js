@@ -15,6 +15,23 @@ export function getModelInvocationId(model) {
   return model?.profileArn || model?.inferenceProfileArn || model?.id;
 }
 
+// Normalisiert die Effort-Konfiguration eines Modells. Liefert null, wenn das
+// Modell kein adaptives Thinking (Effort Level) unterstuetzt.
+export function normalizeEffort(model) {
+  const config = model?.effort;
+  if (!config) return null;
+
+  const levels = Array.isArray(config.levels)
+    ? config.levels.filter((level) => typeof level === "string" && level)
+    : [];
+  if (!levels.length) return null;
+
+  const fallback = levels.includes("high") ? "high" : levels[levels.length - 1];
+  const defaultLevel = levels.includes(config.default) ? config.default : fallback;
+  const style = config.style === "output_config" ? "output_config" : "thinking";
+  return { levels, default: defaultLevel, style };
+}
+
 export function loadModels(modelsPath) {
   let parsed;
 

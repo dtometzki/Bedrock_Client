@@ -2,12 +2,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import {
+  buildAdaptiveThinkingFields,
   buildInferenceConfig,
   formatBedrockErrorMessage,
   isAbortError,
   streamConverseWithRetry
 } from "./bedrock.js";
-import { findModel, getModelInvocationId } from "./models.js";
+import { findModel, getModelInvocationId, normalizeEffort } from "./models.js";
 import { appendAssistantResponse, countHistoryTurns } from "./history.js";
 import { clearSession, writeSession } from "./session.js";
 import { writeLastModelId } from "./config.js";
@@ -230,9 +231,12 @@ export function createWebServer(options = {}) {
     throw new Error("Web-Server benoetigt ein aktives Modell.");
   }
 
+  const initialEffort = normalizeEffort(model);
+
   const state = {
     model,
     inferenceConfig: buildInferenceConfig(model, inferenceOverrides),
+    effort: initialEffort ? initialEffort.default : null,
     systemPrompt,
     messages: [...initialMessages],
     usageTotals: emptyUsageTotals(),
@@ -248,9 +252,14 @@ export function createWebServer(options = {}) {
 
   function getStatePayload() {
     return {
-      models: models.map((entry) => ({ id: entry.id, label: entry.label })),
+      models: models.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        effort: normalizeEffort(entry)
+      })),
       modelId: state.model.id,
       modelLabel: state.model.label,
+      effort: state.effort,
       region,
       identityLabel,
       profile,
@@ -338,11 +347,33 @@ export function createWebServer(options = {}) {
     }
     state.model = selected;
     state.inferenceConfig = buildInferenceConfig(selected, inferenceOverrides);
+    const effortConfig = normalizeEffort(selected);
+    state.effort = effortConfig ? effortConfig.default : null;
     if (persistModelSelection) {
       try {
         writeLastModelId(selected.id);
       } catch {}
     }
+    sendJson(res, 200, getStatePayload());
+  }
+
+  async function handleEffort(req, res) {
+    if (state.busy) {
+      sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
+      return;
+    }
+    const effortConfig = normalizeEffort(state.model);
+    if (!effortConfig) {
+      sendJson(res, 400, { error: "Aktuelles Modell unterstuetzt kein Effort Level." });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const requested = String(body?.effort ?? "").trim();
+    if (!effortConfig.levels.includes(requested)) {
+      sendJson(res, 400, { error: `Ungueltiges Effort Level: ${requested}` });
+      return;
+    }
+    state.effort = requested;
     sendJson(res, 200, getStatePayload());
   }
 
@@ -418,12 +449,17 @@ export function createWebServer(options = {}) {
       let aborted = false;
       let failed = false;
 
+      const effortConfig = normalizeEffort(state.model);
+
       try {
         for await (const event of streamFn(client, {
           modelId: getModelInvocationId(state.model),
           messages: toBedrockMessages(requestMessages),
           system: state.systemPrompt || undefined,
           inferenceConfig: state.inferenceConfig,
+          additionalModelRequestFields: effortConfig
+            ? buildAdaptiveThinkingFields(state.effort, effortConfig.style)
+            : undefined,
           abortSignal: abortController.signal
         })) {
           if (event.type === "retry") {
@@ -495,6 +531,7 @@ export function createWebServer(options = {}) {
       "POST /api/abort": () => handleAbort(res),
       "POST /api/clear": () => handleClear(res),
       "POST /api/model": () => handleModelSwitch(req, res),
+      "POST /api/effort": () => handleEffort(req, res),
       "POST /api/system": () => handleSystemPrompt(req, res)
     }[route];
 

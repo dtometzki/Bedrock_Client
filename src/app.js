@@ -54,15 +54,18 @@ function printSystemStatus(systemPrompt) {
   console.log(terminalLine());
 }
 
+const DEBUG_TRUTHY = new Set(["1", "an", "ein", "on", "true", "yes"]);
+const DEBUG_FALSY = new Set(["0", "aus", "off", "false", "no"]);
+
 function isDebugEnvEnabled(value) {
-  return /^(1|true|yes|on)$/i.test(String(value || ""));
+  return DEBUG_TRUTHY.has(String(value || "").toLowerCase());
 }
 
 function parseDebugCommand(input, currentDebugMode) {
   const value = commandArg(input, "/debug").toLowerCase();
   if (!value) return !currentDebugMode;
-  if (["1", "an", "ein", "on", "true", "yes"].includes(value)) return true;
-  if (["0", "aus", "off", "false", "no"].includes(value)) return false;
+  if (DEBUG_TRUTHY.has(value)) return true;
+  if (DEBUG_FALSY.has(value)) return false;
   if (["status", "state"].includes(value)) return currentDebugMode;
   return null;
 }
@@ -334,6 +337,179 @@ function printHelp(models) {
   models.forEach((m) => console.log(`  - ${m.label} (${m.id})`));
 }
 
+// Merkt sich den Prompt in der History, ohne aufeinanderfolgende Duplikate.
+function rememberPrompt(ctx, input) {
+  if (ctx.promptHistory[ctx.promptHistory.length - 1] !== input) {
+    ctx.promptHistory.push(input);
+  }
+}
+
+// Sendet einen Prompt an das Modell, streamt die Antwort und aktualisiert ctx.
+async function streamModelResponse(ctx, cliArgs, promptText) {
+  ctx.lastPrompt = promptText;
+  const userMessage = { role: "user", content: [{ text: promptText }] };
+  const requestMessages = [...ctx.messages, userMessage];
+  process.stdout.write("\n");
+
+  const bedrockModelId = getModelInvocationId(ctx.currentModel);
+  const interrupter = createStreamInterruptController();
+
+  let fullResponse = "";
+  let lineBuffer = "";
+  let usageRecord = null;
+  let aborted = false;
+  let requestError = null;
+  let reasoningOpen = false;
+
+  const flushLineBuffer = () => {
+    if (lineBuffer) {
+      const formatted = formatLine(lineBuffer);
+      if (formatted !== null) {
+        console.log(formatted);
+      }
+      lineBuffer = "";
+    }
+  };
+
+  try {
+    if (ctx.debugMode) {
+      printDebugLines("Debug Request", formatDebugRequestLines({
+        model: ctx.currentModel,
+        modelId: bedrockModelId,
+        region: ctx.region,
+        profile: process.env.AWS_PROFILE || "default",
+        inferenceConfig: ctx.inferenceConfig,
+        historyMessages: ctx.messages,
+        requestMessages,
+        system: ctx.systemPrompt,
+        maxTurns: ctx.maxTurns
+      }));
+    }
+
+    resetResponseFormatting();
+
+    for await (const event of streamConverseWithRetry(ctx.bedrockClient, {
+      modelId: bedrockModelId,
+      messages: requestMessages,
+      system: ctx.systemPrompt,
+      inferenceConfig: ctx.inferenceConfig,
+      abortSignal: interrupter.signal
+    })) {
+      if (event.type === "retry") {
+        console.error(`${ANSI.gray}Erneuter Versuch ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)} ms (${formatBedrockErrorMessage(event.error)})${ANSI.reset}`);
+        continue;
+      }
+      if (event.type === "usage") {
+        usageRecord = addUsageRecord(ctx.usageTotals, {
+          model: ctx.currentModel,
+          usage: event.usage,
+          metrics: event.metrics
+        });
+        continue;
+      }
+      if (event.type === "reasoning") {
+        if (!reasoningOpen) {
+          process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
+          reasoningOpen = true;
+        }
+        process.stdout.write(event.text);
+        continue;
+      }
+      if (reasoningOpen) {
+        process.stdout.write(`${ANSI.reset}\n\n`);
+        reasoningOpen = false;
+      }
+
+      const text = event.text;
+      fullResponse += text;
+      lineBuffer += text;
+
+      if (lineBuffer.includes("\n")) {
+        const lines = lineBuffer.split("\n");
+        for (let i = 0; i < lines.length - 1; i++) {
+          const formatted = formatLine(lines[i]);
+          if (formatted !== null) {
+            console.log(formatted);
+          }
+        }
+        lineBuffer = lines[lines.length - 1];
+      }
+    }
+  } catch (err) {
+    if (isAbortError(err) || interrupter.signal.aborted) {
+      aborted = true;
+    } else {
+      requestError = err;
+    }
+  } finally {
+    if (reasoningOpen) {
+      process.stdout.write(`${ANSI.reset}\n`);
+      reasoningOpen = false;
+    }
+    interrupter.dispose();
+  }
+
+  // Bereits gepufferte Teil-Zeile in jedem Fall ausgeben (auch bei Fehler/Abbruch).
+  flushLineBuffer();
+
+  if (requestError) {
+    console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(requestError)}${ANSI.reset}`);
+    if (ctx.debugMode) {
+      printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
+        model: ctx.currentModel,
+        modelId: bedrockModelId,
+        region: ctx.region,
+        inferenceConfig: ctx.inferenceConfig
+      }));
+    } else {
+      console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
+    }
+    if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
+      console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
+    }
+  } else {
+    if (aborted) {
+      console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
+    }
+
+    if (fullResponse) {
+      ctx.messages = appendAssistantResponse(requestMessages, fullResponse, {
+        aborted,
+        maxTurns: cliArgs.maxTurns
+      });
+      persistSession(ctx);
+    }
+
+    if (usageRecord) {
+      console.log("");
+      console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
+    }
+  }
+
+  process.stdout.write(ANSI.reset);
+  console.log("");
+}
+
+// Liest Prompts, verarbeitet Slash-Befehle und streamt Modellantworten bis zum Ende.
+async function runChatLoop(ctx, cliArgs) {
+  while (true) {
+    const prompt = await readPrompt({ history: ctx.promptHistory });
+    if (prompt === null) break;
+    const input = prompt.trim();
+
+    if (!input) continue;
+    rememberPrompt(ctx, input);
+
+    const result = await handleCommand(input, ctx);
+    if (result.signal === "break") break;
+    if (result.signal === "handled") continue;
+
+    await streamModelResponse(ctx, cliArgs, result.promptText);
+  }
+
+  console.log(`\n${ANSI.gray}Chat beendet.${ANSI.reset}`);
+}
+
 export async function main() {
   try {
     const cliArgs = parseCliArgs();
@@ -378,7 +554,7 @@ export async function main() {
       }
     }
 
-    const currentModel = models.find((m) => m.id === modelId) ?? activeModel;
+    const currentModel = findModel(models, modelId) ?? activeModel;
     const savedInferenceOverrides = readSavedInferenceOverrides();
     const activeInferenceOverrides = {
       ...savedInferenceOverrides,
@@ -463,166 +639,7 @@ export async function main() {
       return;
     }
 
-    while (true) {
-      const prompt = await readPrompt({ history: ctx.promptHistory });
-      if (prompt === null) break;
-      const input = prompt.trim();
-
-      if (!input) continue;
-      if (ctx.promptHistory[ctx.promptHistory.length - 1] !== input) {
-        ctx.promptHistory.push(input);
-      }
-
-      const result = await handleCommand(input, ctx);
-      if (result.signal === "break") break;
-      if (result.signal === "handled") continue;
-
-      const promptText = result.promptText;
-      ctx.lastPrompt = promptText;
-      const userMessage = { role: "user", content: [{ text: promptText }] };
-      const requestMessages = [...ctx.messages, userMessage];
-      process.stdout.write("\n");
-
-      const bedrockModelId = getModelInvocationId(ctx.currentModel);
-      const interrupter = createStreamInterruptController();
-
-      let fullResponse = "";
-      let lineBuffer = "";
-      let usageRecord = null;
-      let aborted = false;
-      let requestError = null;
-      let reasoningOpen = false;
-
-      const flushLineBuffer = () => {
-        if (lineBuffer) {
-          const formatted = formatLine(lineBuffer);
-          if (formatted !== null) {
-            console.log(formatted);
-          }
-          lineBuffer = "";
-        }
-      };
-
-      try {
-        if (ctx.debugMode) {
-          printDebugLines("Debug Request", formatDebugRequestLines({
-            model: ctx.currentModel,
-            modelId: bedrockModelId,
-            region: ctx.region,
-            profile: process.env.AWS_PROFILE || "default",
-            inferenceConfig: ctx.inferenceConfig,
-            historyMessages: ctx.messages,
-            requestMessages,
-            system: ctx.systemPrompt,
-            maxTurns: ctx.maxTurns
-          }));
-        }
-
-        resetResponseFormatting();
-
-        for await (const event of streamConverseWithRetry(ctx.bedrockClient, {
-          modelId: bedrockModelId,
-          messages: requestMessages,
-          system: ctx.systemPrompt,
-          inferenceConfig: ctx.inferenceConfig,
-          abortSignal: interrupter.signal
-        })) {
-          if (event.type === "retry") {
-            console.error(`${ANSI.gray}Erneuter Versuch ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)} ms (${formatBedrockErrorMessage(event.error)})${ANSI.reset}`);
-            continue;
-          }
-          if (event.type === "usage") {
-            usageRecord = addUsageRecord(ctx.usageTotals, {
-              model: ctx.currentModel,
-              usage: event.usage,
-              metrics: event.metrics
-            });
-            continue;
-          }
-          if (event.type === "reasoning") {
-            if (!reasoningOpen) {
-              process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
-              reasoningOpen = true;
-            }
-            process.stdout.write(event.text);
-            continue;
-          }
-          if (reasoningOpen) {
-            process.stdout.write(`${ANSI.reset}\n\n`);
-            reasoningOpen = false;
-          }
-
-          const text = event.text;
-          fullResponse += text;
-          lineBuffer += text;
-
-          if (lineBuffer.includes("\n")) {
-            const lines = lineBuffer.split("\n");
-            for (let i = 0; i < lines.length - 1; i++) {
-              const formatted = formatLine(lines[i]);
-              if (formatted !== null) {
-                console.log(formatted);
-              }
-            }
-            lineBuffer = lines[lines.length - 1];
-          }
-        }
-      } catch (err) {
-        if (isAbortError(err) || interrupter.signal.aborted) {
-          aborted = true;
-        } else {
-          requestError = err;
-        }
-      } finally {
-        if (reasoningOpen) {
-          process.stdout.write(`${ANSI.reset}\n`);
-          reasoningOpen = false;
-        }
-        interrupter.dispose();
-      }
-
-      // Bereits gepufferte Teil-Zeile in jedem Fall ausgeben (auch bei Fehler/Abbruch).
-      flushLineBuffer();
-
-      if (requestError) {
-        console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(requestError)}${ANSI.reset}`);
-        if (ctx.debugMode) {
-          printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
-            model: ctx.currentModel,
-            modelId: bedrockModelId,
-            region: ctx.region,
-            inferenceConfig: ctx.inferenceConfig
-          }));
-        } else {
-          console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
-        }
-        if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
-          console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
-        }
-      } else {
-        if (aborted) {
-          console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
-        }
-
-        if (fullResponse) {
-          ctx.messages = appendAssistantResponse(requestMessages, fullResponse, {
-            aborted,
-            maxTurns: cliArgs.maxTurns
-          });
-          persistSession(ctx);
-        }
-
-        if (usageRecord) {
-          console.log("");
-          console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
-        }
-      }
-
-      process.stdout.write(ANSI.reset);
-      console.log("");
-    }
-
-    console.log(`\n${ANSI.gray}Chat beendet.${ANSI.reset}`);
+    await runChatLoop(ctx, cliArgs);
   } catch (err) {
     console.error(`\nFehler: ${err.message}`);
     process.exitCode = 1;

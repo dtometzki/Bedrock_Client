@@ -2,6 +2,7 @@
   {
     "id": "global.anthropic.claude-sonnet-4-6",
     "label": "claude-sonnet-4-6",
+    "effort": { "levels": ["low", "medium", "high"], "default": "high" },
     "pricingUsdPer1M": {
       "input": 3,
       "output": 15,
@@ -12,11 +13,13 @@
     "id": "us.anthropic.claude-sonnet-5",
     "label": "claude-sonnet-5",
     "disabledInferenceConfigFields": ["temperature"],
+    "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
     "profileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"
   },
   {
     "id": "global.anthropic.claude-opus-4-6-v1",
     "label": "claude-opus-4-6-v1",
+    "effort": { "levels": ["low", "medium", "high", "max"], "default": "high" },
     "pricingUsdPer1M": {
       "input": 5,
       "output": 25,
@@ -27,6 +30,7 @@
     "id": "global.anthropic.claude-opus-4-8",
     "label": "claude-opus-4-8",
     "disabledInferenceConfigFields": ["temperature"],
+    "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
     "pricingUsdPer1M": {
       "input": 5,
       "output": 25,
@@ -37,6 +41,7 @@
     "id": "us.anthropic.claude-fable-5",
     "label": "claude-fable-5",
     "disabledInferenceConfigFields": ["temperature"],
+    "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
     "aliases": [
       "eu.anthropic.claude-fable-5",
       "global.anthropic.claude-fable-5",

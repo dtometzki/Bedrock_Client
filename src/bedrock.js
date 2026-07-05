@@ -35,6 +35,22 @@ export function buildInferenceConfig(model, overrides = {}) {
   return config;
 }
 
+// Baut die additionalModelRequestFields fuer adaptives Thinking (Effort Level).
+// Anthropic-Reasoning-Modelle steuern den Denk-Aufwand ueber
+// thinking.type = "adaptive" mit einem effort-Wert (low|medium|high|max).
+// Es gibt zwei Request-Formate, je nach Modellgeneration:
+//   - "thinking":       effort steckt in thinking.effort (Opus 4.6, Sonnet 4.6)
+//   - "output_config":  effort steckt in einem separaten output_config.effort
+//                       (Opus 4.8, Sonnet 5, Fable 5). thinking.effort waere
+//                       hier ungueltig ("Extra inputs are not permitted").
+export function buildAdaptiveThinkingFields(effort, style = "thinking") {
+  if (!effort) return undefined;
+  if (style === "output_config") {
+    return { thinking: { type: "adaptive" }, output_config: { effort } };
+  }
+  return { thinking: { type: "adaptive", effort } };
+}
+
 function setErrorField(error, name, value) {
   if (value != null) {
     error[name] = value;
@@ -162,12 +178,15 @@ function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function* streamConverse(client, { modelId, messages, system, inferenceConfig = DEFAULT_INFERENCE_CONFIG, abortSignal }) {
+export async function* streamConverse(client, { modelId, messages, system, inferenceConfig = DEFAULT_INFERENCE_CONFIG, additionalModelRequestFields, abortSignal }) {
   const command = new ConverseStreamCommand({
     modelId,
     messages,
     inferenceConfig,
-    ...(system && { system: [{ text: system }] })
+    ...(system && { system: [{ text: system }] }),
+    ...(additionalModelRequestFields && Object.keys(additionalModelRequestFields).length
+      ? { additionalModelRequestFields }
+      : {})
   });
   const response = await client.send(command, abortSignal ? { abortSignal } : {});
 

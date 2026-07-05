@@ -14,6 +14,20 @@ const MODELS = [
   { id: "model-b", label: "Modell B", profileArn: "arn:aws:bedrock:eu:1:profile/b" }
 ];
 
+const EFFORT_MODELS = [
+  {
+    id: "reason-a",
+    label: "Reasoning A",
+    effort: { levels: ["low", "medium", "high"], default: "high" }
+  },
+  { id: "plain-b", label: "Plain B" },
+  {
+    id: "reason-c",
+    label: "Reasoning C",
+    effort: { levels: ["low", "medium", "high"], default: "high", style: "output_config" }
+  }
+];
+
 function createServerOptions(overrides = {}) {
   return {
     models: MODELS,
@@ -69,10 +83,11 @@ test("GET /api/state liefert Modelle, aktives Modell und Verlauf", async () => {
     const state = await response.json();
 
     assert.deepEqual(state.models, [
-      { id: "model-a", label: "Modell A" },
-      { id: "model-b", label: "Modell B" }
+      { id: "model-a", label: "Modell A", effort: null },
+      { id: "model-b", label: "Modell B", effort: null }
     ]);
     assert.equal(state.modelId, "model-a");
+    assert.equal(state.effort, null);
     assert.equal(state.region, "eu-central-1");
     assert.equal(state.systemPrompt, "Testsystem");
     assert.equal(state.turns, 1);
@@ -182,6 +197,125 @@ test("POST /api/model liefert 404 fuer unbekannte Modelle", async () => {
     const { response, data } = await postJson(`${url}/api/model`, { model: "gibts-nicht" });
     assert.equal(response.status, 404);
     assert.match(data.error, /Modell nicht gefunden/);
+  });
+});
+
+test("Effort-Modelle liefern Effort-Optionen und Default im State", async () => {
+  await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[0] }, async ({ url }) => {
+    const state = await fetch(`${url}/api/state`).then((res) => res.json());
+    assert.deepEqual(state.models[0].effort, { levels: ["low", "medium", "high"], default: "high", style: "thinking" });
+    assert.equal(state.models[1].effort, null);
+    assert.deepEqual(state.models[2].effort, { levels: ["low", "medium", "high"], default: "high", style: "output_config" });
+    assert.equal(state.effort, "high");
+  });
+});
+
+test("POST /api/effort setzt gueltiges Effort Level", async () => {
+  await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[0] }, async ({ url, getState }) => {
+    const { response, data } = await postJson(`${url}/api/effort`, { effort: "low" });
+    assert.equal(response.status, 200);
+    assert.equal(data.effort, "low");
+    assert.equal(getState().effort, "low");
+  });
+});
+
+test("POST /api/effort lehnt ungueltige Level und nicht unterstuetzte Modelle ab", async () => {
+  await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[0] }, async ({ url }) => {
+    const invalid = await postJson(`${url}/api/effort`, { effort: "turbo" });
+    assert.equal(invalid.response.status, 400);
+    assert.match(invalid.data.error, /Ungueltiges Effort Level/);
+  });
+
+  await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[1] }, async ({ url }) => {
+    const unsupported = await postJson(`${url}/api/effort`, { effort: "low" });
+    assert.equal(unsupported.response.status, 400);
+    assert.match(unsupported.data.error, /kein Effort Level/);
+  });
+});
+
+test("POST /api/chat sendet adaptives Thinking mit dem gewaehlten Effort Level", async () => {
+  const receivedParams = [];
+  async function* fakeStream(client, params) {
+    receivedParams.push(params);
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({
+    models: EFFORT_MODELS,
+    model: EFFORT_MODELS[0],
+    streamFn: fakeStream
+  }, async ({ url }) => {
+    await postJson(`${url}/api/effort`, { effort: "medium" });
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+
+    assert.deepEqual(receivedParams[0].additionalModelRequestFields, {
+      thinking: { type: "adaptive", effort: "medium" }
+    });
+  });
+});
+
+test("POST /api/chat nutzt den output_config-Stil bei neueren Modellen", async () => {
+  const receivedParams = [];
+  async function* fakeStream(client, params) {
+    receivedParams.push(params);
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({
+    models: EFFORT_MODELS,
+    model: EFFORT_MODELS[2],
+    streamFn: fakeStream
+  }, async ({ url }) => {
+    await postJson(`${url}/api/effort`, { effort: "low" });
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+
+    assert.deepEqual(receivedParams[0].additionalModelRequestFields, {
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" }
+    });
+  });
+});
+
+test("POST /api/chat ohne Effort-Unterstuetzung sendet keine Thinking-Felder", async () => {
+  const receivedParams = [];
+  async function* fakeStream(client, params) {
+    receivedParams.push(params);
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({
+    models: EFFORT_MODELS,
+    model: EFFORT_MODELS[1],
+    streamFn: fakeStream
+  }, async ({ url }) => {
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+
+    assert.equal(receivedParams[0].additionalModelRequestFields, undefined);
+  });
+});
+
+test("POST /api/model setzt Effort auf den Default des neuen Modells zurueck", async () => {
+  await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[0] }, async ({ url, getState }) => {
+    await postJson(`${url}/api/effort`, { effort: "low" });
+    assert.equal(getState().effort, "low");
+
+    await postJson(`${url}/api/model`, { model: "plain-b" });
+    assert.equal(getState().effort, null);
+
+    await postJson(`${url}/api/model`, { model: "reason-a" });
+    assert.equal(getState().effort, "high");
   });
 });
 

@@ -12,7 +12,7 @@ import {
   writeSavedInferenceOverrides
 } from "../src/config.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "../src/history.js";
-import { findModel, getModelInvocationId, loadModels, normalizeModel, resolveStartupModel } from "../src/models.js";
+import { findModel, getModelInvocationId, loadModels, normalizeEffort, normalizeModel, resolveStartupModel } from "../src/models.js";
 
 function message(role, text) {
   return { role, content: [{ text }] };
@@ -30,6 +30,30 @@ test("models are normalized and resolved strictly", () => {
   assert.equal(resolveStartupModel(models, { requestedModel: "Beta" }).id, "model-b");
   assert.throws(() => resolveStartupModel(models, { requestedModel: "missing" }), /Modell nicht gefunden/);
   assert.throws(() => normalizeModel({}, 1), /id fehlt/);
+});
+
+test("normalizeEffort validates levels and falls back to a sensible default", () => {
+  assert.equal(normalizeEffort({ id: "m" }), null);
+  assert.equal(normalizeEffort({ id: "m", effort: { levels: [] } }), null);
+  assert.deepEqual(
+    normalizeEffort({ id: "m", effort: { levels: ["low", "medium", "high"], default: "high" } }),
+    { levels: ["low", "medium", "high"], default: "high", style: "thinking" }
+  );
+  // Ungueltiger Default faellt auf "high" zurueck, wenn vorhanden.
+  assert.deepEqual(
+    normalizeEffort({ id: "m", effort: { levels: ["low", "medium", "high"], default: "turbo" } }),
+    { levels: ["low", "medium", "high"], default: "high", style: "thinking" }
+  );
+  // Ohne "high" faellt der Default auf das letzte Level.
+  assert.deepEqual(
+    normalizeEffort({ id: "m", effort: { levels: ["low", "medium"] } }),
+    { levels: ["low", "medium"], default: "medium", style: "thinking" }
+  );
+  // Expliziter output_config-Stil wird uebernommen.
+  assert.deepEqual(
+    normalizeEffort({ id: "m", effort: { levels: ["low", "high"], default: "high", style: "output_config" } }),
+    { levels: ["low", "high"], default: "high", style: "output_config" }
+  );
 });
 
 test("profile ARN can be used as Bedrock invocation id", () => {

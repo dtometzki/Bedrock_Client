@@ -28,6 +28,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Supports AWS profile selection at startup and during the running chat
 - Supports overriding the AWS region with `-r, --region` independently of the active profile
 - Streams extended-thinking (reasoning) content dimmed before the answer, without storing it in the history
+- Lets you pick the adaptive-thinking effort level (`low`/`medium`/`high`, Opus also `max`) per reasoning model in the web GUI
 - Supports configurable `maxTokens`, `temperature`, `topP` and stop sequences
 - Supports a debug mode for Bedrock request and error diagnostics
 - Supports standalone CLI usage through `bedrock-chat`
@@ -149,7 +150,7 @@ node app_aws.js --web --no-open
 
 The default browser opens automatically with the GUI (default `http://127.0.0.1:3456`); `--no-open` disables that and only prints the URL.
 
-The web GUI supports streaming responses with Markdown rendering, model switching, collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, per-response token/cost estimates, a usage panel with AWS Cost Explorer billing and session token statistics (the web equivalent of `/usage`), and file attachments via the "+" button or drag & drop (documents: pdf, csv, doc, docx, xls, xlsx, html, txt, md; images: png, jpg, gif, webp; max. 5 files, 4.5 MB each). CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
+The web GUI supports streaming responses with Markdown rendering, model switching, an effort selector for reasoning models (adaptive-thinking depth `low`/`medium`/`high`, Opus also `max`; disabled for models without effort support), collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, per-response token/cost estimates, a usage panel with AWS Cost Explorer billing and session token statistics (the web equivalent of `/usage`), and file attachments via the "+" button or drag & drop (documents: pdf, csv, doc, docx, xls, xlsx, html, txt, md; images: png, jpg, gif, webp; max. 5 files, 4.5 MB each). CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
 
 Notes:
 
@@ -198,6 +199,7 @@ Notes:
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate. If it is omitted, the client falls back to a small built-in price table (see [`src/usage.js`](./src/usage.js), current as of 2026-06); models without a match show `n/a` instead of an estimate. Prefer setting `pricingUsdPer1M` per model so estimates stay accurate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.
+- `effort` is optional and enables the web GUI effort selector for adaptive-thinking (reasoning) models. It takes `levels` (e.g. `["low", "medium", "high"]`, Opus also `"max"`), a `default` level, and an optional `style`: omit it (or use `"thinking"`) for Claude Opus 4.6 / Sonnet 4.6, which expect `thinking.effort`; use `"style": "output_config"` for Claude Opus 4.8 / Sonnet 5 / Fable 5, which expect a separate `output_config.effort`. Models without `effort` show the selector as disabled and send no thinking fields. Example: `"effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" }`.
 - If `label` is omitted, the CLI derives one automatically from `id`.
 - After changing [`models.json`](./models.json), restart the client.
 
