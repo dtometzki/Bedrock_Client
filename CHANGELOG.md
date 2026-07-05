@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.1 - 2026-07-05
+
+- Harden the web GUI against DNS rebinding and cross-origin (CSRF) requests: reject requests whose `Host` header is not a localhost name and, when an `Origin` header is present, require it to match the host.
+- Fix a web server lockup where an unexpected error during a chat request could leave the `busy` flag set, rejecting all later requests with `409`; the busy state and abort controller are now always reset via `try/finally`.
+- Deduplicate the assistant-response finalization (abort marker plus history trimming) into a shared `appendAssistantResponse` helper used by both the CLI and the web server.
+- Drive the CLI help text from a single option list in `cli-args.js` so it can no longer drift from the actual parsed options.
+- Match the premium Opus pricing tier for two-digit model versions (e.g. `opus-4-10`) and compute history turns in a single pass.
+- Add tests for the localhost host/origin guard.
+
 ## 1.9.0 - 2026-07-04
 
 - Add a "Usage" button to the web GUI that opens a panel with current Amazon Bedrock billing costs from AWS Cost Explorer plus session token usage, per-response stats and a per-model breakdown — the web equivalent of `/usage`.

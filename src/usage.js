@@ -15,7 +15,7 @@ import { ANSI, formatInteger, formatLatency, formatUsd, terminalLine } from "./u
 export const DEFAULT_MODEL_PRICING_UPDATED = "2026-06";
 const DEFAULT_MODEL_PRICING_USD_PER_1M = [
   { pattern: /anthropic\.claude-sonnet-4/i, input: 3, output: 15 },
-  { pattern: /anthropic\.claude-opus-4-[5-9]|anthropic\.claude-opus-4\.[5-9]/i, input: 5, output: 25 },
+  { pattern: /anthropic\.claude-opus-4[-.](?:[5-9]|\d{2,})/i, input: 5, output: 25 },
   { pattern: /anthropic\.claude-opus-4/i, input: 15, output: 75 },
   { pattern: /minimax\.minimax-m2\.5/i, input: 0.36, output: 1.44 },
   { pattern: /minimax\.minimax-m2/i, input: 0.36, output: 1.44 }

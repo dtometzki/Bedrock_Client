@@ -154,6 +154,7 @@ The web GUI supports streaming responses with Markdown rendering, model switchin
 Notes:
 
 - The server binds to `127.0.0.1` only and keeps AWS credentials on the server side; the browser never sees them.
+- Requests are rejected unless their `Host` header is a localhost name (protection against DNS rebinding); a present `Origin` header must match the host (CSRF protection).
 - Markdown rendering loads `marked` and `DOMPurify` from a CDN; without internet access the GUI falls back to plain text.
 - One response streams at a time; a second parallel request is rejected until the first finishes or is aborted.
 

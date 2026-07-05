@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import { test } from "node:test";
 import {
   buildAttachmentBlocks,
   getBrowserOpenCommand,
+  isRequestAllowed,
   openInBrowser,
   startWebServer
 } from "../src/web-server.js";
@@ -353,6 +355,41 @@ test("POST /api/chat akzeptiert Anhang ohne Text und lehnt ungueltige Anhaenge a
     });
     assert.equal(response.status, 400);
     assert.match(data.error, /nicht unterstuetzt/);
+  });
+});
+
+test("isRequestAllowed schuetzt vor DNS-Rebinding und fremden Origins", () => {
+  // localhost-Hosts sind erlaubt, auch ohne Origin.
+  assert.equal(isRequestAllowed({ headers: { host: "127.0.0.1:3456" } }), true);
+  assert.equal(isRequestAllowed({ headers: { host: "localhost:3456" } }), true);
+  // Passender Origin ist erlaubt.
+  assert.equal(isRequestAllowed({
+    headers: { host: "127.0.0.1:3456", origin: "http://127.0.0.1:3456" }
+  }), true);
+  // Fremder Host (rebindeter Angreifer) wird abgelehnt.
+  assert.equal(isRequestAllowed({ headers: { host: "evil.com" } }), false);
+  // Fremder Origin bei erlaubtem Host wird abgelehnt (CSRF).
+  assert.equal(isRequestAllowed({
+    headers: { host: "127.0.0.1:3456", origin: "http://evil.com" }
+  }), false);
+});
+
+test("Server lehnt Anfragen mit fremdem Host mit 403 ab", async () => {
+  await withServer({}, async ({ url }) => {
+    const port = Number(new URL(url).port);
+    // fetch verbietet das Setzen des Host-Headers, daher direkt ueber node:http.
+    const statusCode = await new Promise((resolve, reject) => {
+      const req = http.request(
+        { host: "127.0.0.1", port, path: "/api/state", method: "GET", headers: { Host: "evil.com" } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode);
+        }
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(statusCode, 403);
   });
 });
 

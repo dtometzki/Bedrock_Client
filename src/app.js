@@ -8,7 +8,7 @@ import {
   terminalLine
 } from "./ui.js";
 import { SLASH_COMMANDS, printSlashCommands } from "./slash-commands.js";
-import { parseCliArgs, DEFAULT_SYSTEM_PROMPT } from "./cli-args.js";
+import { parseCliArgs, getCliOptionHelp, DEFAULT_SYSTEM_PROMPT } from "./cli-args.js";
 import {
   readLastModelId,
   readSavedInferenceOverrides,
@@ -16,7 +16,7 @@ import {
   writeSavedInferenceOverrides
 } from "./config.js";
 import { clearSession, readSession, writeSession } from "./session.js";
-import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
+import { appendAssistantResponse, countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
 import { findModel, getModelInvocationId, loadModels, resolveStartupModel } from "./models.js";
 import {
   formatProfileList,
@@ -59,7 +59,7 @@ function isDebugEnvEnabled(value) {
 }
 
 function parseDebugCommand(input, currentDebugMode) {
-  const value = input.slice("/debug".length).trim().toLowerCase();
+  const value = commandArg(input, "/debug").toLowerCase();
   if (!value) return !currentDebugMode;
   if (["1", "an", "ein", "on", "true", "yes"].includes(value)) return true;
   if (["0", "aus", "off", "false", "no"].includes(value)) return false;
@@ -102,6 +102,238 @@ function printDebugLines(title, lines) {
   });
 }
 
+// Liefert das Argument eines Slash-Befehls, z. B. commandArg("/model foo", "/model") -> "foo".
+function commandArg(input, name) {
+  return input.slice(name.length).trim();
+}
+
+// True, wenn input exakt der Befehl ist oder mit "<name> " beginnt.
+function matchesCommand(input, name) {
+  return input === name || input.startsWith(`${name} `);
+}
+
+// Fuehrt eine Schreiboperation aus und meldet Fehler nur im Debug-Modus,
+// statt sie still zu verschlucken.
+function tryPersist(action, label, debugMode) {
+  try {
+    action();
+  } catch (err) {
+    if (debugMode) {
+      console.error(`${ANSI.gray}Warnung: ${label} fehlgeschlagen: ${err.message}${ANSI.reset}`);
+    }
+  }
+}
+
+function clearSessionIfEnabled(ctx) {
+  if (ctx.autoSaveEnabled) {
+    clearSession();
+  }
+}
+
+function persistSession(ctx) {
+  if (ctx.autoSaveEnabled) {
+    writeSession(ctx.messages, { modelId: ctx.modelId });
+  }
+}
+
+// Entfernt das letzte user/assistant-Paar, falls es zum wiederholten Prompt passt.
+// Sucht gezielt nach dem Paar am Ende statt feste Indizes anzunehmen.
+function stripRetryPair(messages, prompt) {
+  const assistant = messages[messages.length - 1];
+  const user = messages[messages.length - 2];
+  if (assistant?.role === "assistant" &&
+      user?.role === "user" &&
+      user.content?.[0]?.text === prompt) {
+    return messages.slice(0, -2);
+  }
+  return messages;
+}
+
+// Verarbeitet einen Slash-Befehl. Rueckgabe:
+//   { signal: "break" }               -> Chat beenden
+//   { signal: "handled" }             -> Eingabe erledigt, naechster Prompt
+//   { signal: "run", promptText }     -> Text an das Modell senden
+async function handleCommand(input, ctx) {
+  if (input === "/exit") {
+    return { signal: "break" };
+  }
+
+  if (input === "/" || input === "/help") {
+    printSlashCommands(input);
+    return { signal: "handled" };
+  }
+
+  if (input === "/clear") {
+    ctx.messages = [];
+    clearSessionIfEnabled(ctx);
+    console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
+    console.log(terminalLine());
+    return { signal: "handled" };
+  }
+
+  if (matchesCommand(input, "/system")) {
+    const value = commandArg(input, "/system");
+    if (!value) {
+      printSystemStatus(ctx.systemPrompt);
+      return { signal: "handled" };
+    }
+    if (["reset", "clear", "default"].includes(value.toLowerCase())) {
+      ctx.systemPrompt = value.toLowerCase() === "clear" ? "" : DEFAULT_SYSTEM_PROMPT;
+    } else {
+      ctx.systemPrompt = value;
+    }
+    printSystemStatus(ctx.systemPrompt);
+    return { signal: "handled" };
+  }
+
+  if (matchesCommand(input, "/debug")) {
+    const nextDebugMode = parseDebugCommand(input, ctx.debugMode);
+    if (nextDebugMode === null) {
+      console.error(`${ANSI.yellow}Ungueltiger Debug-Wert:${ANSI.reset} ${commandArg(input, "/debug")}`);
+      console.error(`${ANSI.gray}Nutze /debug, /debug on oder /debug off.${ANSI.reset}`);
+      console.log(terminalLine());
+      return { signal: "handled" };
+    }
+    ctx.debugMode = nextDebugMode;
+    printDebugStatus(ctx.debugMode);
+    return { signal: "handled" };
+  }
+
+  if (input === "/usage") {
+    await printUsageSummary(ctx.usageTotals);
+    return { signal: "handled" };
+  }
+
+  if (matchesCommand(input, "/export")) {
+    if (!ctx.messages.length) {
+      console.log(`${ANSI.gray}Kein Verlauf zum Exportieren.${ANSI.reset}`);
+      console.log(terminalLine());
+      return { signal: "handled" };
+    }
+    const targetPath = commandArg(input, "/export");
+    try {
+      const exportedPath = exportHistoryToMarkdown(ctx.messages, targetPath, {
+        modelLabel: ctx.currentModel.label || ctx.modelId,
+        systemPrompt: ctx.systemPrompt
+      });
+      console.log(`${ANSI.green}Exportiert:${ANSI.reset} ${exportedPath}`);
+    } catch (err) {
+      console.error(`${ANSI.yellow}Export fehlgeschlagen: ${err.message}${ANSI.reset}`);
+    }
+    console.log(terminalLine());
+    return { signal: "handled" };
+  }
+
+  if (input === "/history") {
+    printHistorySummary(ctx.messages, ctx.maxTurns);
+    return { signal: "handled" };
+  }
+
+  if (input === "/account") {
+    console.log(formatAccountSummary({
+      profile: process.env.AWS_PROFILE || "default",
+      region: ctx.region,
+      identityLabel: ctx.identityLabel
+    }).join("\n"));
+    console.log(terminalLine());
+    return { signal: "handled" };
+  }
+
+  if (matchesCommand(input, "/profile")) {
+    const requestedProfile = commandArg(input, "/profile");
+    if (!requestedProfile) {
+      console.log(`${ANSI.green}AWS Profile:${ANSI.reset} ${formatProfileList(listAwsProfiles())}`);
+      console.log(`${ANSI.green}Aktiv:${ANSI.reset} ${ctx.identityLabel || process.env.AWS_PROFILE || "default"}`);
+      console.log(terminalLine());
+      return { signal: "handled" };
+    }
+
+    try {
+      const nextContext = switchAwsProfile(requestedProfile);
+      ctx.region = nextContext.region;
+      ctx.identityLabel = nextContext.identityLabel;
+      ctx.bedrockClient = createBedrockClient({ region: ctx.region });
+      ctx.messages = [];
+      clearSessionIfEnabled(ctx);
+      console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
+      if (ctx.identityLabel) {
+        console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${ctx.identityLabel}`);
+      }
+      console.log(`${ANSI.green}Region:${ANSI.reset} ${ctx.region}`);
+      console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
+      console.log(terminalLine());
+    } catch (err) {
+      console.error(`${ANSI.yellow}${err.message}${ANSI.reset}`);
+      console.log(terminalLine());
+    }
+    return { signal: "handled" };
+  }
+
+  if (matchesCommand(input, "/model")) {
+    const requestedModel = commandArg(input, "/model");
+    let selected = null;
+    if (requestedModel) {
+      selected = findModel(ctx.models, requestedModel);
+      if (!selected) {
+        console.error(`${ANSI.yellow}Modell nicht gefunden:${ANSI.reset} ${requestedModel}`);
+        console.error(`${ANSI.gray}Verfuegbar: ${ctx.models.map((m) => m.label).join(", ")}${ANSI.reset}`);
+        console.log(terminalLine());
+        return { signal: "handled" };
+      }
+    } else {
+      selected = await promptForModelSelection(ctx.models, ctx.modelId);
+    }
+    if (selected) {
+      ctx.modelId = selected.id;
+      ctx.currentModel = selected;
+      ctx.inferenceConfig = buildInferenceConfig(ctx.currentModel, ctx.activeInferenceOverrides);
+      tryPersist(() => writeLastModelId(ctx.modelId), "Modell speichern", ctx.debugMode);
+      console.log(`${ANSI.green}Modell:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}`);
+      console.log(terminalLine());
+    }
+    return { signal: "handled" };
+  }
+
+  if (input === "/retry") {
+    if (!ctx.lastPrompt) {
+      console.error(`${ANSI.yellow}Kein vorheriger Prompt zum Wiederholen.${ANSI.reset}`);
+      console.log(terminalLine());
+      return { signal: "handled" };
+    }
+    ctx.messages = stripRetryPair(ctx.messages, ctx.lastPrompt);
+    console.log(`${ANSI.gray}Wiederhole: ${ctx.lastPrompt}${ANSI.reset}`);
+    return { signal: "run", promptText: ctx.lastPrompt };
+  }
+
+  if (input.startsWith("/")) {
+    const commandName = input.split(/\s+/, 1)[0];
+    console.error(`${ANSI.yellow}Unbekannter Befehl:${ANSI.reset} ${commandName}`);
+    printSlashCommands(commandName);
+    return { signal: "handled" };
+  }
+
+  return { signal: "run", promptText: input };
+}
+
+function printHelp(models) {
+  console.log(`${ANSI.bold}Verwendung:${ANSI.reset} bedrock-chat [Optionen]\n`);
+  console.log("Optionen:");
+  const optionHelp = getCliOptionHelp(DEFAULT_WEB_PORT);
+  const optionWidth = Math.max(...optionHelp.map(([flag]) => flag.length));
+  optionHelp.forEach(([flag, description]) => {
+    console.log(`  ${flag.padEnd(optionWidth)}  ${description}`);
+  });
+  console.log("");
+  console.log("Commands:");
+  const commandNameWidth = Math.max(...SLASH_COMMANDS.map((command) => command.name.length));
+  SLASH_COMMANDS.forEach((command) => {
+    console.log(`  ${command.name.padEnd(commandNameWidth)}  ${command.description}`);
+  });
+  console.log("");
+  console.log("Modelle:");
+  models.forEach((m) => console.log(`  - ${m.label} (${m.id})`));
+}
+
 export async function main() {
   try {
     const cliArgs = parseCliArgs();
@@ -115,35 +347,7 @@ export async function main() {
     const models = loadModels(modelsPath);
 
     if (cliArgs.help) {
-      console.log(`${ANSI.bold}Verwendung:${ANSI.reset} bedrock-chat [Optionen]\n`);
-      console.log("Optionen:");
-      console.log("  -m, --model <name>  Modell beim Start setzen");
-      console.log("  -p, --profile <name> AWS Profil beim Start setzen");
-      console.log("  -p -list           AWS Profile anzeigen und beenden");
-      console.log("  -r, --region <name> AWS Region ueberschreiben");
-      console.log("  -s, --system <text> System Prompt setzen");
-      console.log("  --system-file <pfad> System Prompt aus Datei laden");
-      console.log("  --max-tokens <n>    Max. Antwort-Tokens setzen");
-      console.log("  --temperature <n>   Temperatur setzen (0 bis 1)");
-      console.log("  --top-p <n>         Top-P / Nucleus Sampling setzen (0 bis 1)");
-      console.log("  --stop <text>       Stop-Sequenz setzen (mehrfach moeglich)");
-      console.log("  --max-turns <n>     Verlauf auf n Chat-Turns begrenzen, 0 = unbegrenzt");
-      console.log("  --resume            Letzten gespeicherten Verlauf fortsetzen");
-      console.log("  --no-save           Verlauf nicht automatisch speichern");
-      console.log("  --debug             Debug-Ausgabe fuer Bedrock Requests aktivieren");
-      console.log("  --web               Chat als lokale Web-GUI im Browser starten");
-      console.log(`  --port <n>          Port fuer die Web-GUI (Standard ${DEFAULT_WEB_PORT})`);
-      console.log("  --no-open           Web-GUI nicht automatisch im Browser oeffnen");
-      console.log("  -v, --version      Version anzeigen");
-      console.log("  -h, --help          Hilfe anzeigen\n");
-      console.log("Commands:");
-      const commandNameWidth = Math.max(...SLASH_COMMANDS.map((command) => command.name.length));
-      SLASH_COMMANDS.forEach((command) => {
-        console.log(`  ${command.name.padEnd(commandNameWidth)}  ${command.description}`);
-      });
-      console.log("");
-      console.log("Modelle:");
-      models.forEach((m) => console.log(`  - ${m.label} (${m.id})`));
+      printHelp(models);
       return;
     }
 
@@ -164,62 +368,70 @@ export async function main() {
     });
     let modelId = activeModel.id;
 
+    const startupDebugMode = cliArgs.debug || isDebugEnvEnabled(process.env.BEDROCK_CHAT_DEBUG);
+
     if (!cliArgs.web && !cliArgs.model && !resumeModelId && !lastModelId && models.length > 1) {
       const selected = await promptForModelSelection(models, modelId);
       if (selected) {
         modelId = selected.id;
-        try {
-          writeLastModelId(modelId);
-        } catch {}
+        tryPersist(() => writeLastModelId(modelId), "Modell speichern", startupDebugMode);
       }
     }
 
-    let currentModel = models.find((m) => m.id === modelId) ?? activeModel;
+    const currentModel = models.find((m) => m.id === modelId) ?? activeModel;
     const savedInferenceOverrides = readSavedInferenceOverrides();
     const activeInferenceOverrides = {
       ...savedInferenceOverrides,
       ...cliArgs.inferenceOverrides
     };
     if (Object.keys(cliArgs.inferenceOverrides).length) {
-      try {
-        writeSavedInferenceOverrides(activeInferenceOverrides);
-      } catch {}
+      tryPersist(
+        () => writeSavedInferenceOverrides(activeInferenceOverrides),
+        "Inference-Overrides speichern",
+        startupDebugMode
+      );
     }
-    let inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
+    const inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
     if (cliArgs.region) {
       // Ueberschreibt die Region der Default-Aufloesung (Env, Profil-Konfiguration).
       // Gilt auch nach /profile-Wechseln, da resolveAwsRegion AWS_REGION bevorzugt.
       process.env.AWS_REGION = cliArgs.region;
     }
     const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
-    let { region, identityLabel } = startupContext;
-    let bedrockClient = createBedrockClient({ region });
-    let debugMode = cliArgs.debug || isDebugEnvEnabled(process.env.BEDROCK_CHAT_DEBUG);
-    let systemPrompt = cliArgs.system;
+
     const autoSaveEnabled = !cliArgs.noSave;
-    printStartupBanner({ model: currentModel, inferenceConfig });
-    if (debugMode) {
-      printDebugStatus(debugMode);
-    }
 
-    let messages = [];
-    let lastPrompt = null;
-    const promptHistory = [];
-    const usageTotals = emptyUsageTotals();
+    // Gebuendelter, veraenderlicher Zustand der Chat-Sitzung.
+    const ctx = {
+      models,
+      activeInferenceOverrides,
+      autoSaveEnabled,
+      usageTotals: emptyUsageTotals(),
+      promptHistory: [],
+      maxTurns: cliArgs.maxTurns,
+      messages: [],
+      lastPrompt: null,
+      systemPrompt: cliArgs.system,
+      debugMode: startupDebugMode,
+      currentModel,
+      modelId,
+      inferenceConfig,
+      region: startupContext.region,
+      identityLabel: startupContext.identityLabel,
+      bedrockClient: createBedrockClient({ region: startupContext.region })
+    };
 
-    function persistSession() {
-      if (autoSaveEnabled) {
-        writeSession(messages, { modelId });
-      }
+    printStartupBanner({ model: ctx.currentModel, inferenceConfig: ctx.inferenceConfig });
+    if (ctx.debugMode) {
+      printDebugStatus(ctx.debugMode);
     }
 
     if (cliArgs.resume) {
-      const saved = savedSession;
-      if (saved.messages.length) {
-        messages = trimMessagesToMaxTurns(saved.messages, cliArgs.maxTurns);
-        console.log(`${ANSI.green}Verlauf fortgesetzt:${ANSI.reset} ${countHistoryTurns(messages)} Turns${saved.savedAt ? ` (${saved.savedAt})` : ""}`);
+      if (savedSession.messages.length) {
+        ctx.messages = trimMessagesToMaxTurns(savedSession.messages, cliArgs.maxTurns);
+        console.log(`${ANSI.green}Verlauf fortgesetzt:${ANSI.reset} ${countHistoryTurns(ctx.messages)} Turns${savedSession.savedAt ? ` (${savedSession.savedAt})` : ""}`);
         if (resumeModelId && !cliArgs.model) {
-          console.log(`${ANSI.green}Modell wiederhergestellt:${ANSI.reset} ${currentModel.label || modelId}`);
+          console.log(`${ANSI.green}Modell wiederhergestellt:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}`);
         }
         console.log(terminalLine());
       } else {
@@ -231,16 +443,16 @@ export async function main() {
     if (cliArgs.web) {
       const { url } = await startWebServer({
         models,
-        model: currentModel,
-        client: bedrockClient,
+        model: ctx.currentModel,
+        client: ctx.bedrockClient,
         inferenceOverrides: activeInferenceOverrides,
-        systemPrompt,
-        region,
-        identityLabel,
+        systemPrompt: ctx.systemPrompt,
+        region: ctx.region,
+        identityLabel: ctx.identityLabel,
         profile: process.env.AWS_PROFILE || "default",
         maxTurns: cliArgs.maxTurns,
         autoSave: autoSaveEnabled,
-        messages,
+        messages: ctx.messages,
         port: cliArgs.port ?? DEFAULT_WEB_PORT
       });
       console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${url}`);
@@ -252,176 +464,26 @@ export async function main() {
     }
 
     while (true) {
-      const prompt = await readPrompt({ history: promptHistory });
+      const prompt = await readPrompt({ history: ctx.promptHistory });
       if (prompt === null) break;
       const input = prompt.trim();
 
       if (!input) continue;
-      if (promptHistory[promptHistory.length - 1] !== input) {
-        promptHistory.push(input);
-      }
-      if (input === "/exit") break;
-      if (input === "/" || input === "/help") {
-        printSlashCommands(input);
-        continue;
-      }
-      if (input === "/clear") {
-        messages = [];
-        if (autoSaveEnabled) {
-          clearSession();
-        }
-        console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
-        console.log(terminalLine());
-        continue;
-      }
-      if (input === "/system" || input.startsWith("/system ")) {
-        const value = input.slice("/system".length).trim();
-        if (!value) {
-          printSystemStatus(systemPrompt);
-          continue;
-        }
-        if (["reset", "clear", "default"].includes(value.toLowerCase())) {
-          systemPrompt = value.toLowerCase() === "clear" ? "" : DEFAULT_SYSTEM_PROMPT;
-        } else {
-          systemPrompt = value;
-        }
-        printSystemStatus(systemPrompt);
-        continue;
-      }
-      if (input === "/debug" || input.startsWith("/debug ")) {
-        const nextDebugMode = parseDebugCommand(input, debugMode);
-        if (nextDebugMode === null) {
-          console.log(`${ANSI.yellow}Ungueltiger Debug-Wert:${ANSI.reset} ${input.slice("/debug".length).trim()}`);
-          console.log(`${ANSI.gray}Nutze /debug, /debug on oder /debug off.${ANSI.reset}`);
-          console.log(terminalLine());
-          continue;
-        }
-        debugMode = nextDebugMode;
-        printDebugStatus(debugMode);
-        continue;
-      }
-      if (input === "/usage") {
-        await printUsageSummary(usageTotals);
-        continue;
-      }
-      if (input === "/export" || input.startsWith("/export ")) {
-        if (!messages.length) {
-          console.log(`${ANSI.gray}Kein Verlauf zum Exportieren.${ANSI.reset}`);
-          console.log(terminalLine());
-          continue;
-        }
-        const targetPath = input.slice("/export".length).trim();
-        try {
-          const exportedPath = exportHistoryToMarkdown(messages, targetPath, {
-            modelLabel: currentModel.label || modelId,
-            systemPrompt
-          });
-          console.log(`${ANSI.green}Exportiert:${ANSI.reset} ${exportedPath}`);
-        } catch (err) {
-          console.error(`${ANSI.yellow}Export fehlgeschlagen: ${err.message}${ANSI.reset}`);
-        }
-        console.log(terminalLine());
-        continue;
-      }
-      if (input === "/history") {
-        printHistorySummary(messages, cliArgs.maxTurns);
-        continue;
-      }
-      if (input === "/account") {
-        console.log(formatAccountSummary({
-          profile: process.env.AWS_PROFILE || "default",
-          region,
-          identityLabel
-        }).join("\n"));
-        console.log(terminalLine());
-        continue;
-      }
-      if (input === "/profile" || input.startsWith("/profile ")) {
-        const requestedProfile = input.slice("/profile".length).trim();
-        if (!requestedProfile) {
-          console.log(`${ANSI.green}AWS Profile:${ANSI.reset} ${formatProfileList(listAwsProfiles())}`);
-          console.log(`${ANSI.green}Aktiv:${ANSI.reset} ${identityLabel || process.env.AWS_PROFILE || "default"}`);
-          console.log(terminalLine());
-          continue;
-        }
-
-        try {
-          const nextContext = switchAwsProfile(requestedProfile);
-          region = nextContext.region;
-          identityLabel = nextContext.identityLabel;
-          bedrockClient = createBedrockClient({ region });
-          messages = [];
-          if (autoSaveEnabled) {
-            clearSession();
-          }
-          console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
-          if (identityLabel) {
-            console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${identityLabel}`);
-          }
-          console.log(`${ANSI.green}Region:${ANSI.reset} ${region}`);
-          console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
-          console.log(terminalLine());
-        } catch (err) {
-          console.error(`${ANSI.yellow}${err.message}${ANSI.reset}`);
-          console.log(terminalLine());
-        }
-        continue;
-      }
-      if (input === "/model" || input.startsWith("/model ")) {
-        const requestedModel = input.slice("/model".length).trim();
-        let selected = null;
-        if (requestedModel) {
-          selected = findModel(models, requestedModel);
-          if (!selected) {
-            console.log(`${ANSI.yellow}Modell nicht gefunden:${ANSI.reset} ${requestedModel}`);
-            console.log(`${ANSI.gray}Verfuegbar: ${models.map((m) => m.label).join(", ")}${ANSI.reset}`);
-            console.log(terminalLine());
-            continue;
-          }
-        } else {
-          selected = await promptForModelSelection(models, modelId);
-        }
-        if (selected) {
-          modelId = selected.id;
-          currentModel = selected;
-          inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
-          try {
-            writeLastModelId(modelId);
-          } catch {}
-          console.log(`${ANSI.green}Modell:${ANSI.reset} ${currentModel.label || modelId}`);
-          console.log(terminalLine());
-        }
-        continue;
-      }
-      let promptText = input;
-      if (input === "/retry") {
-        if (!lastPrompt) {
-          console.log(`${ANSI.yellow}Kein vorheriger Prompt zum Wiederholen.${ANSI.reset}`);
-          console.log(terminalLine());
-          continue;
-        }
-        promptText = lastPrompt;
-        const lastUser = messages[messages.length - 2];
-        const lastAssistant = messages[messages.length - 1];
-        if (lastAssistant?.role === "assistant" &&
-            lastUser?.role === "user" &&
-            lastUser.content?.[0]?.text === lastPrompt) {
-          messages = messages.slice(0, -2);
-        }
-        console.log(`${ANSI.gray}Wiederhole: ${promptText}${ANSI.reset}`);
-      } else if (input.startsWith("/")) {
-        const commandName = input.split(/\s+/, 1)[0];
-        console.log(`${ANSI.yellow}Unbekannter Befehl:${ANSI.reset} ${commandName}`);
-        printSlashCommands(commandName);
-        continue;
+      if (ctx.promptHistory[ctx.promptHistory.length - 1] !== input) {
+        ctx.promptHistory.push(input);
       }
 
-      lastPrompt = promptText;
+      const result = await handleCommand(input, ctx);
+      if (result.signal === "break") break;
+      if (result.signal === "handled") continue;
+
+      const promptText = result.promptText;
+      ctx.lastPrompt = promptText;
       const userMessage = { role: "user", content: [{ text: promptText }] };
-      const requestMessages = [...messages, userMessage];
+      const requestMessages = [...ctx.messages, userMessage];
       process.stdout.write("\n");
 
-      const bedrockModelId = getModelInvocationId(currentModel);
+      const bedrockModelId = getModelInvocationId(ctx.currentModel);
       const interrupter = createStreamInterruptController();
 
       let fullResponse = "";
@@ -431,28 +493,38 @@ export async function main() {
       let requestError = null;
       let reasoningOpen = false;
 
+      const flushLineBuffer = () => {
+        if (lineBuffer) {
+          const formatted = formatLine(lineBuffer);
+          if (formatted !== null) {
+            console.log(formatted);
+          }
+          lineBuffer = "";
+        }
+      };
+
       try {
-        if (debugMode) {
+        if (ctx.debugMode) {
           printDebugLines("Debug Request", formatDebugRequestLines({
-            model: currentModel,
+            model: ctx.currentModel,
             modelId: bedrockModelId,
-            region,
+            region: ctx.region,
             profile: process.env.AWS_PROFILE || "default",
-            inferenceConfig,
-            historyMessages: messages,
+            inferenceConfig: ctx.inferenceConfig,
+            historyMessages: ctx.messages,
             requestMessages,
-            system: systemPrompt,
-            maxTurns: cliArgs.maxTurns
+            system: ctx.systemPrompt,
+            maxTurns: ctx.maxTurns
           }));
         }
 
         resetResponseFormatting();
 
-        for await (const event of streamConverseWithRetry(bedrockClient, {
+        for await (const event of streamConverseWithRetry(ctx.bedrockClient, {
           modelId: bedrockModelId,
           messages: requestMessages,
-          system: systemPrompt,
-          inferenceConfig,
+          system: ctx.systemPrompt,
+          inferenceConfig: ctx.inferenceConfig,
           abortSignal: interrupter.signal
         })) {
           if (event.type === "retry") {
@@ -460,8 +532,8 @@ export async function main() {
             continue;
           }
           if (event.type === "usage") {
-            usageRecord = addUsageRecord(usageTotals, {
-              model: currentModel,
+            usageRecord = addUsageRecord(ctx.usageTotals, {
+              model: ctx.currentModel,
               usage: event.usage,
               metrics: event.metrics
             });
@@ -509,14 +581,17 @@ export async function main() {
         interrupter.dispose();
       }
 
+      // Bereits gepufferte Teil-Zeile in jedem Fall ausgeben (auch bei Fehler/Abbruch).
+      flushLineBuffer();
+
       if (requestError) {
         console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(requestError)}${ANSI.reset}`);
-        if (debugMode) {
+        if (ctx.debugMode) {
           printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
-            model: currentModel,
+            model: ctx.currentModel,
             modelId: bedrockModelId,
-            region,
-            inferenceConfig
+            region: ctx.region,
+            inferenceConfig: ctx.inferenceConfig
           }));
         } else {
           console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
@@ -525,26 +600,16 @@ export async function main() {
           console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
         }
       } else {
-        if (lineBuffer) {
-          const formatted = formatLine(lineBuffer);
-          if (formatted !== null) {
-            console.log(formatted);
-          }
-        }
-
         if (aborted) {
           console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
         }
 
         if (fullResponse) {
-          const responseText = aborted
-            ? `${fullResponse}\n\n[Antwort abgebrochen – unvollstaendig]`
-            : fullResponse;
-          messages = trimMessagesToMaxTurns([
-            ...requestMessages,
-            { role: "assistant", content: [{ text: responseText }] }
-          ], cliArgs.maxTurns);
-          persistSession();
+          ctx.messages = appendAssistantResponse(requestMessages, fullResponse, {
+            aborted,
+            maxTurns: cliArgs.maxTurns
+          });
+          persistSession(ctx);
         }
 
         if (usageRecord) {

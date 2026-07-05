@@ -12,9 +12,26 @@ export function trimMessagesToMaxTurns(messages, maxTurns) {
 }
 
 export function countHistoryTurns(messages) {
-  const userMessages = messages.filter((message) => message.role === "user").length;
-  const assistantMessages = messages.filter((message) => message.role === "assistant").length;
+  let userMessages = 0;
+  let assistantMessages = 0;
+  for (const message of messages) {
+    if (message.role === "user") userMessages += 1;
+    else if (message.role === "assistant") assistantMessages += 1;
+  }
   return Math.min(userMessages, assistantMessages);
+}
+
+// Haengt die Assistant-Antwort an die Request-Nachrichten an und begrenzt den
+// Verlauf. Bei Abbruch wird der Teiltext mit einem Hinweis markiert.
+// Gemeinsam genutzt von CLI (app.js) und Web-Server (web-server.js).
+export function appendAssistantResponse(requestMessages, fullResponse, { aborted = false, maxTurns = 0 } = {}) {
+  const responseText = aborted
+    ? `${fullResponse}\n\n[Antwort abgebrochen – unvollstaendig]`
+    : fullResponse;
+  return trimMessagesToMaxTurns([
+    ...requestMessages,
+    { role: "assistant", content: [{ text: responseText }] }
+  ], maxTurns);
 }
 
 export function formatHistoryLimit(maxTurns) {

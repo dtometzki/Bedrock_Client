@@ -6,6 +6,32 @@ export const DEFAULT_MAX_TOKENS = 2000;
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_MAX_HISTORY_TURNS = 20;
 
+// Einzige Quelle fuer die Hilfetexte der CLI-Optionen, damit sie nicht von den
+// tatsaechlich in parseCliArgs definierten Optionen abweichen.
+export function getCliOptionHelp(defaultWebPort) {
+  return [
+    ["-m, --model <name>", "Modell beim Start setzen"],
+    ["-p, --profile <name>", "AWS Profil beim Start setzen"],
+    ["-p list", "AWS Profile anzeigen und beenden"],
+    ["-r, --region <name>", "AWS Region ueberschreiben"],
+    ["-s, --system <text>", "System Prompt setzen"],
+    ["--system-file <pfad>", "System Prompt aus Datei laden"],
+    ["--max-tokens <n>", "Max. Antwort-Tokens setzen"],
+    ["--temperature <n>", "Temperatur setzen (0 bis 1)"],
+    ["--top-p <n>", "Top-P / Nucleus Sampling setzen (0 bis 1)"],
+    ["--stop <text>", "Stop-Sequenz setzen (mehrfach moeglich)"],
+    ["--max-turns <n>", "Verlauf auf n Chat-Turns begrenzen, 0 = unbegrenzt"],
+    ["--resume", "Letzten gespeicherten Verlauf fortsetzen"],
+    ["--no-save", "Verlauf nicht automatisch speichern"],
+    ["--debug", "Debug-Ausgabe fuer Bedrock Requests aktivieren"],
+    ["--web", "Chat als lokale Web-GUI im Browser starten"],
+    ["--port <n>", `Port fuer die Web-GUI (Standard ${defaultWebPort})`],
+    ["--no-open", "Web-GUI nicht automatisch im Browser oeffnen"],
+    ["-v, --version", "Version anzeigen"],
+    ["-h, --help", "Hilfe anzeigen"]
+  ];
+}
+
 function normalizeArgs(args) {
   const normalized = [];
 

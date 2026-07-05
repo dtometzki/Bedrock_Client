@@ -8,7 +8,7 @@ import {
   streamConverseWithRetry
 } from "./bedrock.js";
 import { findModel, getModelInvocationId } from "./models.js";
-import { countHistoryTurns, trimMessagesToMaxTurns } from "./history.js";
+import { appendAssistantResponse, countHistoryTurns } from "./history.js";
 import { clearSession, writeSession } from "./session.js";
 import { writeLastModelId } from "./config.js";
 import { addUsageRecord, emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
@@ -110,6 +110,34 @@ export function buildAttachmentBlocks(attachments) {
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+// Schutz gegen DNS-Rebinding und CSRF von anderen lokalen Ursprüngen:
+// Der Host-Header muss auf localhost zeigen (ein rebindeter Angreifer-Host
+// sendet Host: evil.com), und ein vorhandener Origin-Header muss zum Host
+// passen. Fehlt Origin (direkte Navigation, Tools ohne Browser), wird die
+// Anfrage zugelassen.
+export function isRequestAllowed(req) {
+  const hostHeader = req.headers?.host || "";
+  const hostname = hostHeader.replace(/:\d+$/, "");
+  if (!ALLOWED_HOSTNAMES.has(hostname)) {
+    return false;
+  }
+
+  const origin = req.headers?.origin;
+  if (origin) {
+    try {
+      if (new URL(origin).host !== hostHeader) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
@@ -357,100 +385,105 @@ export function createWebServer(options = {}) {
     const abortController = new AbortController();
     state.abortController = abortController;
 
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive"
-    });
-    const send = (event) => {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    };
-    res.on("close", () => {
-      if (state.busy && state.abortController === abortController) {
-        abortController.abort();
-      }
-    });
-
-    const userMessage = {
-      role: "user",
-      content: [
-        ...(message ? [{ text: message }] : []),
-        ...attachmentResult.blocks
-      ],
-      ...(attachmentResult.displayNames.length && { attachmentNames: attachmentResult.displayNames })
-    };
-    const requestMessages = [...state.messages, userMessage];
-
-    let fullResponse = "";
-    let usageRecord = null;
-    let aborted = false;
-    let failed = false;
-
+    // try/finally stellt sicher, dass busy/abortController auch bei einem
+    // unerwarteten Fehler zurueckgesetzt werden. Sonst blockiert der Server
+    // dauerhaft alle weiteren Anfragen mit 409.
     try {
-      for await (const event of streamFn(client, {
-        modelId: getModelInvocationId(state.model),
-        messages: toBedrockMessages(requestMessages),
-        system: state.systemPrompt || undefined,
-        inferenceConfig: state.inferenceConfig,
-        abortSignal: abortController.signal
-      })) {
-        if (event.type === "retry") {
-          send({
-            type: "retry",
-            attempt: event.attempt,
-            maxRetries: event.maxRetries,
-            delayMs: Math.round(event.delayMs),
-            message: formatBedrockErrorMessage(event.error)
-          });
-          continue;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive"
+      });
+      const send = (event) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+      res.on("close", () => {
+        if (state.busy && state.abortController === abortController) {
+          abortController.abort();
         }
-        if (event.type === "usage") {
-          usageRecord = addUsageRecord(state.usageTotals, {
-            model: state.model,
-            usage: event.usage,
-            metrics: event.metrics
-          });
-          continue;
-        }
-        if (event.type === "reasoning") {
-          send({ type: "reasoning", text: event.text });
-          continue;
-        }
-        fullResponse += event.text;
-        send({ type: "text", text: event.text });
-      }
-    } catch (err) {
-      if (isAbortError(err) || abortController.signal.aborted) {
-        aborted = true;
-      } else {
-        failed = true;
-        send({ type: "error", message: formatBedrockErrorMessage(err) });
-      }
-    }
+      });
 
-    if (!failed && fullResponse) {
-      const responseText = aborted
-        ? `${fullResponse}\n\n[Antwort abgebrochen – unvollstaendig]`
-        : fullResponse;
-      state.messages = trimMessagesToMaxTurns([
-        ...requestMessages,
-        { role: "assistant", content: [{ text: responseText }] }
-      ], maxTurns);
-      persistSession();
-    }
+      const userMessage = {
+        role: "user",
+        content: [
+          ...(message ? [{ text: message }] : []),
+          ...attachmentResult.blocks
+        ],
+        ...(attachmentResult.displayNames.length && { attachmentNames: attachmentResult.displayNames })
+      };
+      const requestMessages = [...state.messages, userMessage];
 
-    send({
-      type: "done",
-      aborted,
-      failed,
-      usage: toPublicUsageRecord(usageRecord)
-    });
-    res.end();
-    state.busy = false;
-    state.abortController = null;
+      let fullResponse = "";
+      let usageRecord = null;
+      let aborted = false;
+      let failed = false;
+
+      try {
+        for await (const event of streamFn(client, {
+          modelId: getModelInvocationId(state.model),
+          messages: toBedrockMessages(requestMessages),
+          system: state.systemPrompt || undefined,
+          inferenceConfig: state.inferenceConfig,
+          abortSignal: abortController.signal
+        })) {
+          if (event.type === "retry") {
+            send({
+              type: "retry",
+              attempt: event.attempt,
+              maxRetries: event.maxRetries,
+              delayMs: Math.round(event.delayMs),
+              message: formatBedrockErrorMessage(event.error)
+            });
+            continue;
+          }
+          if (event.type === "usage") {
+            usageRecord = addUsageRecord(state.usageTotals, {
+              model: state.model,
+              usage: event.usage,
+              metrics: event.metrics
+            });
+            continue;
+          }
+          if (event.type === "reasoning") {
+            send({ type: "reasoning", text: event.text });
+            continue;
+          }
+          fullResponse += event.text;
+          send({ type: "text", text: event.text });
+        }
+      } catch (err) {
+        if (isAbortError(err) || abortController.signal.aborted) {
+          aborted = true;
+        } else {
+          failed = true;
+          send({ type: "error", message: formatBedrockErrorMessage(err) });
+        }
+      }
+
+      if (!failed && fullResponse) {
+        state.messages = appendAssistantResponse(requestMessages, fullResponse, { aborted, maxTurns });
+        persistSession();
+      }
+
+      send({
+        type: "done",
+        aborted,
+        failed,
+        usage: toPublicUsageRecord(usageRecord)
+      });
+      res.end();
+    } finally {
+      state.busy = false;
+      state.abortController = null;
+    }
   }
 
   const server = http.createServer((req, res) => {
+    if (!isRequestAllowed(req)) {
+      sendJson(res, 403, { error: "Zugriff nur von localhost erlaubt." });
+      return;
+    }
+
     const { pathname } = new URL(req.url, "http://localhost");
     const route = `${req.method} ${pathname}`;
 
