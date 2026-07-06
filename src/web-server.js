@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import {
@@ -141,6 +142,33 @@ export function isRequestAllowed(req) {
   return true;
 }
 
+// Liest das Auth-Token aus dem Request: bevorzugt der x-bedrock-token-Header
+// (von der GUI gesetzt), alternativ der ?token=-Query-Parameter (damit die
+// Seite ueberhaupt geladen werden kann).
+function getRequestToken(req, url) {
+  const header = req.headers?.["x-bedrock-token"];
+  if (header) return String(header);
+  return url.searchParams.get("token") || "";
+}
+
+// Konstantzeit-Vergleich, damit die Antwortzeit das Token nicht Zeichen fuer
+// Zeichen preisgibt.
+export function timingSafeEqualStrings(a, b) {
+  const bufferA = Buffer.from(String(a), "utf8");
+  const bufferB = Buffer.from(String(b), "utf8");
+  if (bufferA.length !== bufferB.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < bufferA.length; i++) {
+    mismatch |= bufferA[i] ^ bufferB[i];
+  }
+  return mismatch === 0;
+}
+
+export function isTokenValid(req, url, authToken) {
+  if (!authToken) return true;
+  return timingSafeEqualStrings(getRequestToken(req, url), authToken);
+}
+
 export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -224,7 +252,8 @@ export function createWebServer(options = {}) {
     streamFn = streamConverseWithRetry,
     billingFn = loadCurrentBedrockBillingCost,
     indexHtmlPath = INDEX_HTML_URL,
-    persistModelSelection = true
+    persistModelSelection = true,
+    authToken = ""
   } = options;
 
   if (!model) {
@@ -425,8 +454,12 @@ export function createWebServer(options = {}) {
         "Cache-Control": "no-cache",
         Connection: "keep-alive"
       });
+      // Nach einem Client-Disconnect ist die Response beendet; weitere Writes
+      // wuerden fehlschlagen. Der Guard verwirft solche Events still.
       const send = (event) => {
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
       };
       res.on("close", () => {
         if (state.busy && state.abortController === abortController) {
@@ -507,7 +540,9 @@ export function createWebServer(options = {}) {
         failed,
         usage: toPublicUsageRecord(usageRecord)
       });
-      res.end();
+      if (!res.writableEnded) {
+        res.end();
+      }
     } finally {
       state.busy = false;
       state.abortController = null;
@@ -520,7 +555,13 @@ export function createWebServer(options = {}) {
       return;
     }
 
-    const { pathname } = new URL(req.url, "http://localhost");
+    const url = new URL(req.url, "http://localhost");
+    if (!isTokenValid(req, url, authToken)) {
+      sendJson(res, 403, { error: "Ungueltiges oder fehlendes Token." });
+      return;
+    }
+
+    const { pathname } = url;
     const route = `${req.method} ${pathname}`;
 
     const handler = {
@@ -577,7 +618,12 @@ export function openInBrowser(url, { platform = process.platform, spawnFn = spaw
 
 export function startWebServer(options = {}) {
   const { port = DEFAULT_WEB_PORT, host = "127.0.0.1", ...rest } = options;
-  const { server, getState } = createWebServer(rest);
+  // Standardmaessig ein zufaelliges Token erzeugen; leeres Token deaktiviert
+  // die Pruefung (z. B. in Tests). Bewusst per authToken === null abschaltbar.
+  const authToken = rest.authToken === undefined
+    ? randomBytes(24).toString("hex")
+    : rest.authToken;
+  const { server, getState } = createWebServer({ ...rest, authToken });
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -586,6 +632,7 @@ export function startWebServer(options = {}) {
       resolve({
         server,
         getState,
+        authToken,
         port: address.port,
         url: `http://${host}:${address.port}`
       });

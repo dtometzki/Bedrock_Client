@@ -5,8 +5,10 @@ import {
   buildAttachmentBlocks,
   getBrowserOpenCommand,
   isRequestAllowed,
+  isTokenValid,
   openInBrowser,
-  startWebServer
+  startWebServer,
+  timingSafeEqualStrings
 } from "../src/web-server.js";
 
 const MODELS = [
@@ -41,6 +43,8 @@ function createServerOptions(overrides = {}) {
     autoSave: false,
     persistModelSelection: false,
     port: 0,
+    // Token-Pruefung in den Funktionstests aus; ein eigener Test deckt sie ab.
+    authToken: "",
     ...overrides
   };
 }
@@ -578,4 +582,44 @@ test("maxTurns begrenzt den gespeicherten Verlauf", async () => {
     assert.equal(state.messages.length, 2);
     assert.equal(state.messages[0].text, "zwei");
   });
+});
+
+test("timingSafeEqualStrings vergleicht Werte korrekt", () => {
+  assert.equal(timingSafeEqualStrings("abc", "abc"), true);
+  assert.equal(timingSafeEqualStrings("abc", "abd"), false);
+  assert.equal(timingSafeEqualStrings("abc", "abcd"), false);
+  assert.equal(timingSafeEqualStrings("", ""), true);
+});
+
+test("isTokenValid ohne konfiguriertes Token laesst alles zu", () => {
+  const req = { headers: {} };
+  const url = new URL("http://localhost/api/state");
+  assert.equal(isTokenValid(req, url, ""), true);
+});
+
+test("isTokenValid akzeptiert Token via Header und Query", () => {
+  const url = new URL("http://localhost/api/state?token=geheim");
+  assert.equal(isTokenValid({ headers: { "x-bedrock-token": "geheim" } }, new URL("http://localhost/"), "geheim"), true);
+  assert.equal(isTokenValid({ headers: {} }, url, "geheim"), true);
+  assert.equal(isTokenValid({ headers: {} }, new URL("http://localhost/"), "geheim"), false);
+  assert.equal(isTokenValid({ headers: { "x-bedrock-token": "falsch" } }, new URL("http://localhost/"), "geheim"), false);
+});
+
+test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => {
+  const { server, url, authToken } = await startWebServer(createServerOptions({ authToken: undefined }));
+  try {
+    assert.equal(typeof authToken, "string");
+    assert.ok(authToken.length >= 32);
+
+    const denied = await fetch(`${url}/api/state`);
+    assert.equal(denied.status, 403);
+
+    const allowedHeader = await fetch(`${url}/api/state`, { headers: { "x-bedrock-token": authToken } });
+    assert.equal(allowedHeader.status, 200);
+
+    const allowedQuery = await fetch(`${url}/api/state?token=${authToken}`);
+    assert.equal(allowedQuery.status, 200);
+  } finally {
+    server.close();
+  }
 });

@@ -3,9 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Bedrock Chat</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"
+        integrity="sha512-xeUh+KxNyTufZOje++oQHstlMQ8/rpyzPuM+gjMFYK3z5ILJGE7l2NvYL+XfliKURMpBIKKp1XoPN/qswlSMFA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"
+        integrity="sha512-jB0TkTBeQC9ZSkBqDhdmfTv1qdfbWpGE72yJ/01Srq6hEzZIz2xkz1e57p9ai7IeHMwEG7HpzG6NdptChif5Pg=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root {
     --bg: #262624;
@@ -340,6 +345,17 @@
 (() => {
   "use strict";
 
+  // Der Server erwartet bei aktiviertem Auth-Token dessen Wert in jedem
+  // API-Request. Die Seite selbst wurde mit ?token=... geladen; wir lesen den
+  // Wert aus der eigenen URL und senden ihn als Header bei jedem fetch mit.
+  const AUTH_TOKEN = new URLSearchParams(location.search).get("token") || "";
+
+  function apiFetch(url, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (AUTH_TOKEN) headers["x-bedrock-token"] = AUTH_TOKEN;
+    return fetch(url, { ...options, headers });
+  }
+
   const el = {
     messages: document.getElementById("messages"),
     empty: document.getElementById("empty"),
@@ -537,12 +553,12 @@
   }
 
   async function loadState() {
-    const response = await fetch("/api/state");
+    const response = await apiFetch("/api/state");
     applyState(await response.json());
   }
 
   async function postJson(url, payload) {
-    const response = await fetch(url, {
+    const response = await apiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {})
@@ -608,7 +624,7 @@
     };
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await apiFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, attachments: attachments })
@@ -744,7 +760,7 @@
     el.usageOverlay.style.display = "";
     el.usageBody.textContent = "Lade… (AWS Cost Explorer kann einige Sekunden brauchen)";
     try {
-      const response = await fetch("/api/usage");
+      const response = await apiFetch("/api/usage");
       if (!response.ok) throw new Error(response.statusText);
       renderUsage(await response.json());
     } catch (err) {

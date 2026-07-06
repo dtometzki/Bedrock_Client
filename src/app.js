@@ -650,7 +650,7 @@ export async function main() {
     }
 
     if (cliArgs.web) {
-      const { url } = await startWebServer({
+      const { url, authToken } = await startWebServer({
         models,
         model: ctx.currentModel,
         client: ctx.bedrockClient,
@@ -664,9 +664,12 @@ export async function main() {
         messages: ctx.messages,
         port: cliArgs.port ?? DEFAULT_WEB_PORT
       });
-      console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${url}`);
+      // Das Token schuetzt den lokalen Server davor, von anderen Prozessen auf
+      // dem Rechner angesteuert zu werden (die echte Bedrock-Kosten verursachen).
+      const guiUrl = authToken ? `${url}/?token=${authToken}` : url;
+      console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${guiUrl}`);
       if (!cliArgs.noOpen) {
-        openInBrowser(url);
+        openInBrowser(guiUrl);
       }
       console.log(`${ANSI.gray}Beenden mit Ctrl+C.${ANSI.reset}`);
       return;
