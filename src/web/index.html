@@ -379,6 +379,14 @@
   // Wert aus der eigenen URL und senden ihn als Header bei jedem fetch mit.
   const AUTH_TOKEN = new URLSearchParams(location.search).get("token") || "";
 
+  // Token aus der Adresszeile entfernen, damit es nicht in der Browser-History
+  // oder in kopierten Links landet. Fuer die API-Requests reicht die Konstante.
+  if (AUTH_TOKEN && window.history?.replaceState) {
+    const cleanUrl = new URL(location.href);
+    cleanUrl.searchParams.delete("token");
+    window.history.replaceState(null, "", cleanUrl.toString());
+  }
+
   function apiFetch(url, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (AUTH_TOKEN) headers["x-bedrock-token"] = AUTH_TOKEN;

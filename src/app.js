@@ -364,7 +364,7 @@ function rememberPrompt(ctx, input) {
 }
 
 // Sendet einen Prompt an das Modell, streamt die Antwort und aktualisiert ctx.
-async function streamModelResponse(ctx, cliArgs, promptText) {
+async function streamModelResponse(ctx, promptText) {
   ctx.lastPrompt = promptText;
   const userMessage = { role: "user", content: [{ text: promptText }] };
   const requestMessages = [...ctx.messages, userMessage];
@@ -501,7 +501,7 @@ async function streamModelResponse(ctx, cliArgs, promptText) {
     if (fullResponse) {
       ctx.messages = appendAssistantResponse(requestMessages, fullResponse, {
         aborted,
-        maxTurns: cliArgs.maxTurns
+        maxTurns: ctx.maxTurns
       });
       persistSession(ctx);
     }
@@ -517,7 +517,7 @@ async function streamModelResponse(ctx, cliArgs, promptText) {
 }
 
 // Liest Prompts, verarbeitet Slash-Befehle und streamt Modellantworten bis zum Ende.
-async function runChatLoop(ctx, cliArgs) {
+async function runChatLoop(ctx) {
   while (true) {
     const prompt = await readPrompt({ history: ctx.promptHistory });
     if (prompt === null) break;
@@ -530,7 +530,7 @@ async function runChatLoop(ctx, cliArgs) {
     if (result.signal === "break") break;
     if (result.signal === "handled") continue;
 
-    await streamModelResponse(ctx, cliArgs, result.promptText);
+    await streamModelResponse(ctx, result.promptText);
   }
 
   console.log(`\n${ANSI.gray}Chat beendet.${ANSI.reset}`);
@@ -675,7 +675,7 @@ export async function main() {
       return;
     }
 
-    await runChatLoop(ctx, cliArgs);
+    await runChatLoop(ctx);
   } catch (err) {
     console.error(`\nFehler: ${err.message}`);
     process.exitCode = 1;

@@ -52,12 +52,12 @@ export function buildAttachmentBlock(attachment) {
     return { error: `Anhang ohne Inhalt: ${name || "unbenannt"}` };
   }
 
-  let bytes;
-  try {
-    bytes = Buffer.from(dataBase64, "base64");
-  } catch {
+  // Buffer.from wirft bei ungueltigem Base64 nicht, sondern ignoriert
+  // ungueltige Zeichen still – daher explizit vorab validieren.
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(dataBase64) || dataBase64.length % 4 !== 0) {
     return { error: `Anhang konnte nicht dekodiert werden: ${name}` };
   }
+  const bytes = Buffer.from(dataBase64, "base64");
   if (!bytes.length) {
     return { error: `Anhang ohne Inhalt: ${name || "unbenannt"}` };
   }
@@ -363,11 +363,13 @@ export function createWebServer(options = {}) {
   }
 
   async function handleModelSwitch(req, res) {
+    // Body zuerst lesen, dann busy pruefen: Waehrend des await koennte eine
+    // Chat-Anfrage starten; der Check danach verhindert Wechsel mid-stream.
+    const body = await readJsonBody(req);
     if (state.busy) {
       sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
       return;
     }
-    const body = await readJsonBody(req);
     const requested = String(body?.model ?? "").trim();
     const selected = findModel(models, requested);
     if (!selected) {
@@ -387,6 +389,8 @@ export function createWebServer(options = {}) {
   }
 
   async function handleEffort(req, res) {
+    // Body zuerst lesen, dann busy pruefen (siehe handleModelSwitch).
+    const body = await readJsonBody(req);
     if (state.busy) {
       sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
       return;
@@ -396,7 +400,6 @@ export function createWebServer(options = {}) {
       sendJson(res, 400, { error: "Aktuelles Modell unterstuetzt kein Effort Level." });
       return;
     }
-    const body = await readJsonBody(req);
     const requested = String(body?.effort ?? "").trim();
     if (!effortConfig.levels.includes(requested)) {
       sendJson(res, 400, { error: `Ungueltiges Effort Level: ${requested}` });
@@ -407,11 +410,12 @@ export function createWebServer(options = {}) {
   }
 
   async function handleSystemPrompt(req, res) {
+    // Body zuerst lesen, dann busy pruefen (siehe handleModelSwitch).
+    const body = await readJsonBody(req);
     if (state.busy) {
       sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
       return;
     }
-    const body = await readJsonBody(req);
     state.systemPrompt = String(body?.system ?? "").trim();
     sendJson(res, 200, getStatePayload());
   }
@@ -421,11 +425,16 @@ export function createWebServer(options = {}) {
       sendJson(res, 409, { error: "Es laeuft bereits eine Anfrage." });
       return;
     }
+    // busy sofort (synchron) setzen: Der Body-Read unten ist ein await, und
+    // eine zweite parallele Anfrage wuerde sonst den busy-Check ebenfalls
+    // passieren und gleichzeitig streamen (Race auf state.messages/abortController).
+    state.busy = true;
 
     let body;
     try {
       body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
     } catch (err) {
+      state.busy = false;
       sendJson(res, 400, { error: err.message });
       return;
     }
@@ -433,15 +442,16 @@ export function createWebServer(options = {}) {
     const message = String(body?.message ?? "").trim();
     const attachmentResult = buildAttachmentBlocks(body?.attachments);
     if (attachmentResult.error) {
+      state.busy = false;
       sendJson(res, 400, { error: attachmentResult.error });
       return;
     }
     if (!message && !attachmentResult.blocks.length) {
+      state.busy = false;
       sendJson(res, 400, { error: "Leere Nachricht." });
       return;
     }
 
-    state.busy = true;
     const abortController = new AbortController();
     state.abortController = abortController;
 

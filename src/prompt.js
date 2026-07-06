@@ -75,7 +75,7 @@ async function promptForModelSelectionByNumber(models, currentModelId, preferred
   const choice = await rl.question(`${ANSI.bold}>${ANSI.reset} `);
   rl.close();
   const index = parseInt(choice.trim(), 10) - 1;
-  if (index < 0 || index >= models.length) return null;
+  if (!Number.isInteger(index) || index < 0 || index >= models.length) return null;
   const model = models[index];
   return { model, effort: resolveEffortLevel(model, preferredEffort) };
 }
@@ -103,8 +103,8 @@ export async function promptForModelSelection(models, currentModelId, preferredE
 
     function render() {
       if (renderedLineCount) {
-        process.stdout.write(`[${renderedLineCount}A`);
-        process.stdout.write("\r[0J");
+        process.stdout.write(`\u001b[${renderedLineCount}A`);
+        process.stdout.write("\r\u001b[0J");
       }
 
       const lines = formatModelSelectionLines(models, currentModelId, selectedIndex, selectedEffort);
@@ -251,16 +251,16 @@ export async function readPrompt({ history = [] } = {}) {
     function render() {
       clampSlashSelection();
       const suggestions = slashSuggestionLines();
-      process.stdout.write("\r[0J");
+      process.stdout.write("\r\u001b[0J");
       process.stdout.write(`${promptText}${line}`);
       if (suggestions.length) {
         process.stdout.write(`\n${suggestions.join("\n")}`);
-        process.stdout.write(`[${suggestions.length}A`);
+        process.stdout.write(`\u001b[${suggestions.length}A`);
       }
       process.stdout.write("\r");
       const column = promptVisibleColumns + cursor;
       if (column > 0) {
-        process.stdout.write(`[${column}C`);
+        process.stdout.write(`\u001b[${column}C`);
       }
     }
 
@@ -297,7 +297,7 @@ export async function readPrompt({ history = [] } = {}) {
       if (done) return;
       done = true;
       process.stdin.off("keypress", onKeypress);
-      process.stdout.write("\r[0J");
+      process.stdout.write("\r\u001b[0J");
       if (value !== null) {
         process.stdout.write(`${promptText}${line}\n`);
       }
