@@ -115,6 +115,31 @@
     border-radius: 8px;
     padding: 10px 14px;
   }
+  .notice {
+    display: none;
+    align-items: flex-start;
+    gap: 10px;
+    color: #e4b463;
+    background: #4a3c2333;
+    border: 1px solid #e4b46344;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 12px auto 0;
+    max-width: 760px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .notice.show { display: flex; }
+  .notice .notice-close {
+    margin-left: auto;
+    cursor: pointer;
+    color: inherit;
+    background: none;
+    border: none;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+  }
 
   details.reasoning {
     color: var(--text-dim);
@@ -318,6 +343,10 @@
 </div>
 
 <main id="main">
+  <div class="notice" id="libNotice">
+    <span id="libNoticeText"></span>
+    <button class="notice-close" id="libNoticeClose" title="Ausblenden" aria-label="Ausblenden">×</button>
+  </div>
   <div class="container" id="messages">
     <div class="empty" id="empty">
       <h1>Womit kann ich helfen?</h1>
@@ -376,7 +405,10 @@
     usageBtn: document.getElementById("usageBtn"),
     usageOverlay: document.getElementById("usageOverlay"),
     usageBody: document.getElementById("usageBody"),
-    usageCloseBtn: document.getElementById("usageCloseBtn")
+    usageCloseBtn: document.getElementById("usageCloseBtn"),
+    libNotice: document.getElementById("libNotice"),
+    libNoticeText: document.getElementById("libNoticeText"),
+    libNoticeClose: document.getElementById("libNoticeClose")
   };
 
   const MAX_ATTACHMENTS = 5;
@@ -388,13 +420,33 @@
   let pendingAttachments = [];
   let effortSupported = false;
 
+  // Beide Bibliotheken werden vom CDN geladen. Fehlt eine (z. B. weil ein
+  // Versionswechsel den SRI-Hash ungueltig macht und der Browser das Skript
+  // deshalb blockiert), rendern wir sicher als Klartext statt roher HTML.
+  const markdownReady = Boolean(window.marked && window.DOMPurify);
+
   function renderMarkdown(text) {
-    if (window.marked && window.DOMPurify) {
+    if (markdownReady) {
       return DOMPurify.sanitize(marked.parse(text));
     }
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML.replace(/\n/g, "<br>");
+  }
+
+  // Zeigt einmalig eine gut sichtbare Meldung, wenn die Markdown-Bibliotheken
+  // nicht geladen werden konnten. Der Chat bleibt voll nutzbar (Klartext).
+  function checkMarkdownLibs() {
+    if (markdownReady) return;
+    const missing = [!window.marked && "marked", !window.DOMPurify && "DOMPurify"]
+      .filter(Boolean)
+      .join(" und ");
+    el.libNoticeText.textContent =
+      "Formatierung eingeschraenkt: " + missing + " konnte nicht geladen werden. " +
+      "Antworten werden als Klartext angezeigt. Meist liegt das an fehlender " +
+      "Internetverbindung zum CDN oder an einem Versionswechsel mit unpassendem " +
+      "Integritaets-Hash (SRI). Der Chat funktioniert normal weiter.";
+    el.libNotice.classList.add("show");
   }
 
   function scrollToBottom() {
@@ -852,6 +904,11 @@
     }
   });
 
+  el.libNoticeClose.addEventListener("click", () => {
+    el.libNotice.classList.remove("show");
+  });
+
+  checkMarkdownLibs();
   loadState().catch((err) => {
     el.status.textContent = "Status konnte nicht geladen werden: " + err.message;
   });
