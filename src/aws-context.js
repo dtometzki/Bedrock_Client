@@ -30,10 +30,26 @@ export function getAwsConfigValue(key, profile = null) {
   }
 }
 
-export function awsLoginCommand() {
+export function awsLoginArgs() {
   const profile = getActiveAwsProfile();
   const loginProfile = getAwsConfigValue("source_profile", profile) || profile;
-  return loginProfile === "default" ? "aws login" : `aws login --profile ${loginProfile}`;
+  return loginProfile === "default" ? ["login"] : ["login", "--profile", loginProfile];
+}
+
+export function awsLoginCommand() {
+  return ["aws", ...awsLoginArgs()].join(" ");
+}
+
+// Startet das AWS-Login interaktiv (Browser-Flow). Gibt true zurueck, wenn
+// das Login erfolgreich durchlief.
+export function runAwsLogin() {
+  try {
+    console.log(`AWS Session abgelaufen – starte ${awsLoginCommand()} ...`);
+    execFileSync("aws", awsLoginArgs(), { stdio: "inherit" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function formatAwsIdentity(identity) {
@@ -69,16 +85,27 @@ export function resolveAwsRegion() {
     "us-east-1";
 }
 
-export function loadAwsIdentity() {
+function fetchAwsIdentity() {
+  const identityJson = execSync("aws sts get-caller-identity --output json", {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  return formatAwsIdentity(JSON.parse(identityJson));
+}
+
+export function loadAwsIdentity({ autoLogin = true } = {}) {
   try {
-    const identityJson = execSync("aws sts get-caller-identity --output json", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    return formatAwsIdentity(JSON.parse(identityJson));
+    return fetchAwsIdentity();
   } catch (err) {
     const errorText = getCommandErrorText(err);
     if (isExpiredAwsSession(errorText)) {
+      if (autoLogin && runAwsLogin()) {
+        try {
+          return fetchAwsIdentity();
+        } catch {
+          // Login lief durch, Identity trotzdem nicht lesbar -> manueller Hinweis
+        }
+      }
       throw new Error(`AWS Session abgelaufen. Bitte neu anmelden:\n\n  ${awsLoginCommand()}`);
     }
     if (isMissingAwsCredentials(errorText)) {
