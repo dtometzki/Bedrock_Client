@@ -1,6 +1,7 @@
 import readline from "node:readline";
 import * as readlinePromises from "node:readline/promises";
-import { ANSI, terminalLine } from "./ui.js";
+import { ANSI, formatEffortLabel, terminalLine } from "./ui.js";
+import { normalizeEffort, resolveEffortLevel } from "./models.js";
 import {
   completeSlashCommand,
   formatSlashCommandLines,
@@ -22,7 +23,23 @@ function getInitialModelSelectionIndex(models, currentModelId) {
   return index >= 0 ? index : 0;
 }
 
-export function formatModelSelectionLines(models, currentModelId, selectedIndex = -1) {
+// Baut die Effort-Zeile fuer das aktuell markierte Modell. Liefert null, wenn
+// das Modell kein Effort Level unterstuetzt.
+function formatEffortSelectionLine(model, selectedEffort) {
+  const config = normalizeEffort(model);
+  if (!config) return null;
+
+  const level = config.levels.includes(selectedEffort) ? selectedEffort : config.default;
+  const options = config.levels
+    .map((lvl) => {
+      const label = formatEffortLabel(lvl);
+      return lvl === level ? `${ANSI.inverse} ${label} ${ANSI.reset}` : `${ANSI.gray}${label}${ANSI.reset}`;
+    })
+    .join("  ");
+  return `${ANSI.bold}Effort${ANSI.reset}  ${options}`;
+}
+
+export function formatModelSelectionLines(models, currentModelId, selectedIndex = -1, selectedEffort = null) {
   const lines = [terminalLine(), `${ANSI.bold}Modelle${ANSI.reset}`];
 
   models.forEach((model, index) => {
@@ -39,12 +56,18 @@ export function formatModelSelectionLines(models, currentModelId, selectedIndex 
     lines.push(`${marker} ${ANSI.gray}${number}${ANSI.reset} ${model.label}${active}`);
   });
 
-  lines.push(`${ANSI.gray}Pfeile waehlen, Enter uebernimmt.${ANSI.reset}`);
+  const effortLine = formatEffortSelectionLine(models[selectedIndex], selectedEffort);
+  if (effortLine) {
+    lines.push(effortLine);
+    lines.push(`${ANSI.gray}Pfeile waehlen, Pfeil links/rechts Effort, Enter uebernimmt.${ANSI.reset}`);
+  } else {
+    lines.push(`${ANSI.gray}Pfeile waehlen, Enter uebernimmt.${ANSI.reset}`);
+  }
   lines.push(terminalLine());
   return lines;
 }
 
-async function promptForModelSelectionByNumber(models, currentModelId) {
+async function promptForModelSelectionByNumber(models, currentModelId, preferredEffort = null) {
   const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
   console.log("");
   console.log(formatModelSelectionLines(models, currentModelId).join("\n"));
@@ -52,12 +75,14 @@ async function promptForModelSelectionByNumber(models, currentModelId) {
   const choice = await rl.question(`${ANSI.bold}>${ANSI.reset} `);
   rl.close();
   const index = parseInt(choice.trim(), 10) - 1;
-  return (index >= 0 && index < models.length) ? models[index] : null;
+  if (index < 0 || index >= models.length) return null;
+  const model = models[index];
+  return { model, effort: resolveEffortLevel(model, preferredEffort) };
 }
 
-export async function promptForModelSelection(models, currentModelId) {
+export async function promptForModelSelection(models, currentModelId, preferredEffort = null) {
   if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
-    return await promptForModelSelectionByNumber(models, currentModelId);
+    return await promptForModelSelectionByNumber(models, currentModelId, preferredEffort);
   }
 
   readline.emitKeypressEvents(process.stdin);
@@ -67,6 +92,10 @@ export async function promptForModelSelection(models, currentModelId) {
 
   return await new Promise((resolve) => {
     let selectedIndex = getInitialModelSelectionIndex(models, currentModelId);
+    // Merkt sich den Effort-Wunsch ueber Modellwechsel hinweg (sticky), faellt
+    // aber je Modell auf einen gueltigen Wert bzw. den Default zurueck.
+    let preferred = preferredEffort;
+    let selectedEffort = resolveEffortLevel(models[selectedIndex], preferred);
     let renderedLineCount = 0;
     let done = false;
 
@@ -78,7 +107,7 @@ export async function promptForModelSelection(models, currentModelId) {
         process.stdout.write("\r[0J");
       }
 
-      const lines = formatModelSelectionLines(models, currentModelId, selectedIndex);
+      const lines = formatModelSelectionLines(models, currentModelId, selectedIndex, selectedEffort);
       process.stdout.write(`${lines.join("\n")}\n`);
       renderedLineCount = lines.length;
     }
@@ -94,8 +123,23 @@ export async function promptForModelSelection(models, currentModelId) {
       resolve(value);
     }
 
+    function setSelection(index) {
+      selectedIndex = index;
+      selectedEffort = resolveEffortLevel(models[selectedIndex], preferred);
+      render();
+    }
+
     function moveSelection(delta) {
-      selectedIndex = (selectedIndex + delta + models.length) % models.length;
+      setSelection((selectedIndex + delta + models.length) % models.length);
+    }
+
+    function changeEffort(delta) {
+      const config = normalizeEffort(models[selectedIndex]);
+      if (!config) return;
+      const current = config.levels.includes(selectedEffort) ? selectedEffort : config.default;
+      const nextIndex = (config.levels.indexOf(current) + delta + config.levels.length) % config.levels.length;
+      selectedEffort = config.levels[nextIndex];
+      preferred = selectedEffort;
       render();
     }
 
@@ -109,7 +153,7 @@ export async function promptForModelSelection(models, currentModelId) {
         return;
       }
       if (key.name === "return" || key.name === "enter") {
-        cleanup(models[selectedIndex]);
+        cleanup({ model: models[selectedIndex], effort: selectedEffort });
         return;
       }
       if (key.name === "up") {
@@ -120,21 +164,26 @@ export async function promptForModelSelection(models, currentModelId) {
         moveSelection(1);
         return;
       }
+      if (key.name === "left") {
+        changeEffort(-1);
+        return;
+      }
+      if (key.name === "right") {
+        changeEffort(1);
+        return;
+      }
       if (key.name === "home") {
-        selectedIndex = 0;
-        render();
+        setSelection(0);
         return;
       }
       if (key.name === "end") {
-        selectedIndex = models.length - 1;
-        render();
+        setSelection(models.length - 1);
         return;
       }
       if (/^[1-9]$/.test(str || "")) {
         const index = Number(str) - 1;
         if (index < models.length) {
-          selectedIndex = index;
-          render();
+          setSelection(index);
         }
       }
     }

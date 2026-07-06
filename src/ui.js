@@ -43,6 +43,13 @@ export function formatHomePath(path) {
   return path;
 }
 
+export const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", max: "Max" };
+
+export function formatEffortLabel(effort) {
+  if (!effort) return "";
+  return EFFORT_LABELS[effort] || effort;
+}
+
 export function formatInferenceConfig(inferenceConfig = {}) {
   const parts = [];
 
@@ -79,10 +86,13 @@ export function formatAccountSummary({ profile = "default", region = "us-east-1"
   return lines;
 }
 
-export function printStartupBanner({ model, inferenceConfig }) {
+export function printStartupBanner({ model, inferenceConfig, effort = null }) {
   const width = terminalWidth();
   const modelLabel = model.label || model.id;
-  const inferenceLabel = formatInferenceConfig(inferenceConfig);
+  const effortLabel = formatEffortLabel(effort);
+  const inferenceLabel = [formatInferenceConfig(inferenceConfig), effortLabel ? `Effort: ${effortLabel}` : ""]
+    .filter(Boolean)
+    .join(" | ");
 
   console.log("");
   console.log(`${ANSI.bold}${centerText(`AWS Bedrock CLI ${getPackageVersion()}`, width)}${ANSI.reset}`);

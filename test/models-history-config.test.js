@@ -7,12 +7,14 @@ import {
   getLastModelPath,
   getSettingsPath,
   readLastModelId,
+  readSavedEffort,
   readSavedInferenceOverrides,
   writeLastModelId,
+  writeSavedEffort,
   writeSavedInferenceOverrides
 } from "../src/config.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "../src/history.js";
-import { findModel, getModelInvocationId, loadModels, normalizeEffort, normalizeModel, resolveStartupModel } from "../src/models.js";
+import { findModel, getModelInvocationId, loadModels, normalizeEffort, normalizeModel, resolveEffortLevel, resolveStartupModel } from "../src/models.js";
 
 function message(role, text) {
   return { role, content: [{ text }] };
@@ -54,6 +56,17 @@ test("normalizeEffort validates levels and falls back to a sensible default", ()
     normalizeEffort({ id: "m", effort: { levels: ["low", "high"], default: "high", style: "output_config" } }),
     { levels: ["low", "high"], default: "high", style: "output_config" }
   );
+});
+
+test("resolveEffortLevel keeps a valid preference or falls back to the model default", () => {
+  const model = { id: "m", effort: { levels: ["low", "medium", "high"], default: "high" } };
+  // Kein Effort-Support -> null.
+  assert.equal(resolveEffortLevel({ id: "plain" }), null);
+  // Gueltiger Wunsch wird beibehalten.
+  assert.equal(resolveEffortLevel(model, "low"), "low");
+  // Ungueltiger/leerer Wunsch faellt auf den Default zurueck.
+  assert.equal(resolveEffortLevel(model, "turbo"), "high");
+  assert.equal(resolveEffortLevel(model, null), "high");
 });
 
 test("profile ARN can be used as Bedrock invocation id", () => {
@@ -134,6 +147,29 @@ test("inference overrides are persisted in settings", () => {
       temperature: 0.25,
       topP: 0.9
     });
+  } finally {
+    if (previousConfigDir == null) {
+      delete process.env.BEDROCK_CHAT_CONFIG_DIR;
+    } else {
+      process.env.BEDROCK_CHAT_CONFIG_DIR = previousConfigDir;
+    }
+  }
+});
+
+test("effort selection is persisted in settings", () => {
+  const previousConfigDir = process.env.BEDROCK_CHAT_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-chat-test-"));
+
+  try {
+    process.env.BEDROCK_CHAT_CONFIG_DIR = configDir;
+    assert.equal(readSavedEffort(), null);
+
+    writeSavedEffort("low");
+    assert.equal(readSavedEffort(), "low");
+
+    // Ungueltiger Wert entfernt den Eintrag wieder.
+    writeSavedEffort("");
+    assert.equal(readSavedEffort(), null);
   } finally {
     if (previousConfigDir == null) {
       delete process.env.BEDROCK_CHAT_CONFIG_DIR;

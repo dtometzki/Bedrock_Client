@@ -32,6 +32,16 @@ export function normalizeEffort(model) {
   return { levels, default: defaultLevel, style };
 }
 
+// Bestimmt das anzuwendende Effort Level fuer ein Modell. Bevorzugt den
+// uebergebenen Wunsch (z. B. gespeicherte Nutzerwahl), faellt aber auf den
+// Modell-Default zurueck, wenn der Wunsch fuer dieses Modell nicht gueltig ist.
+// Liefert null, wenn das Modell kein Effort Level unterstuetzt.
+export function resolveEffortLevel(model, preferred = null) {
+  const config = normalizeEffort(model);
+  if (!config) return null;
+  return config.levels.includes(preferred) ? preferred : config.default;
+}
+
 export function loadModels(modelsPath) {
   let parsed;
 

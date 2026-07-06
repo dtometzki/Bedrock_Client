@@ -6,7 +6,7 @@ export const SLASH_COMMANDS = [
   { name: "/account", description: "AWS Account und Region anzeigen" },
   { name: "/profile", description: "AWS Profile anzeigen" },
   { name: "/profile <name>", completion: "/profile", description: "AWS Profil wechseln" },
-  { name: "/model", description: "Modell wechseln" },
+  { name: "/model", description: "Modell und Effort (Denk-Aufwand) wechseln" },
   { name: "/model <name>", completion: "/model", description: "Modell direkt per Name wechseln" },
   { name: "/retry", description: "Letzten Prompt erneut senden" },
   { name: "/export", description: "Verlauf als Markdown exportieren" },

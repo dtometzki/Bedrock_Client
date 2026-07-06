@@ -84,3 +84,22 @@ export function writeSavedInferenceOverrides(inferenceOverrides) {
   settings.inferenceOverrides = normalizeInferenceOverrides(inferenceOverrides);
   writeSettings(settings);
 }
+
+// Liest das zuletzt gewaehlte Effort Level (Denk-Aufwand) aus den Settings.
+// Liefert null, wenn nichts Gueltiges gespeichert ist.
+export function readSavedEffort() {
+  const settings = readSettings();
+  const value = settings.effort;
+  return typeof value === "string" && value ? value : null;
+}
+
+// Speichert das zuletzt gewaehlte Effort Level. null/leer entfernt den Eintrag.
+export function writeSavedEffort(effort) {
+  const settings = readSettings();
+  if (typeof effort === "string" && effort) {
+    settings.effort = effort;
+  } else {
+    delete settings.effort;
+  }
+  writeSettings(settings);
+}

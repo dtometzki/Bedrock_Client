@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.11.0 - 2026-07-06
+
+- Bring the "Effort" (adaptive-thinking depth) control from the web GUI to the terminal client: the `/model` picker now shows an inline effort row for reasoning models that is changed with the left/right arrow keys, so model and effort are chosen in one menu.
+- Send the selected effort to Bedrock from the CLI as `additionalModelRequestFields` (via the existing `buildAdaptiveThinkingFields`), so terminal requests now honor the effort level just like the web; models without an `effort` config send no thinking fields.
+- Persist the chosen effort in `settings.json` (`readSavedEffort`/`writeSavedEffort`) and restore it on startup; the effort preference is kept across model switches when the target model supports it, otherwise it falls back to the model default.
+- Add `resolveEffortLevel(model, preferred)` to `src/models.js` to centralize "keep a valid preference, else use the model default".
+- Show the active effort in the startup banner (e.g. `Effort: Hoch`) and in `/debug` request output (effort level plus the resulting `additionalModelRequestFields`).
+- Add tests for `resolveEffortLevel`, effort persistence and the picker's effort row.
+
 ## 1.10.0 - 2026-07-05
 
 - Add an "Effort" dropdown to the web GUI (next to the model selector) that controls adaptive-thinking depth for reasoning models via `low`/`medium`/`high` (Opus additionally `max`).

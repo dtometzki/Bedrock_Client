@@ -13,7 +13,8 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Starts an interactive Bedrock chat in the terminal
 - Optionally serves the chat as a local web GUI with `--web` (streaming, Markdown rendering, model switching)
 - Lets you choose and switch models interactively, including arrow-key navigation in `/model` and direct switching with `/model <name>`
-- Stores the last selected model for the next start
+- Lets you pick the adaptive-thinking effort level (`low`/`medium`/`high`, Opus also `max`) directly in the `/model` picker for reasoning models: use the left/right arrow keys to change it
+- Stores the last selected model and effort level for the next start
 - Shows the active AWS account and region with `/account`
 - Shows current Amazon Bedrock billing costs and session token usage with `/usage`
 - Limits retained chat history by default to keep context size predictable
@@ -199,7 +200,7 @@ Notes:
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate. If it is omitted, the client falls back to a small built-in price table (see [`src/usage.js`](./src/usage.js), current as of 2026-06); models without a match show `n/a` instead of an estimate. Prefer setting `pricingUsdPer1M` per model so estimates stay accurate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.
-- `effort` is optional and enables the web GUI effort selector for adaptive-thinking (reasoning) models. It takes `levels` (e.g. `["low", "medium", "high"]`, Opus also `"max"`), a `default` level, and an optional `style`: omit it (or use `"thinking"`) for Claude Opus 4.6 / Sonnet 4.6, which expect `thinking.effort`; use `"style": "output_config"` for Claude Opus 4.8 / Sonnet 5 / Fable 5, which expect a separate `output_config.effort`. Models without `effort` show the selector as disabled and send no thinking fields. Example: `"effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" }`.
+- `effort` is optional and enables the effort selector (in both the web GUI and the terminal `/model` picker) for adaptive-thinking (reasoning) models. It takes `levels` (e.g. `["low", "medium", "high"]`, Opus also `"max"`), a `default` level, and an optional `style`: omit it (or use `"thinking"`) for Claude Opus 4.6 / Sonnet 4.6, which expect `thinking.effort`; use `"style": "output_config"` for Claude Opus 4.8 / Sonnet 5 / Fable 5, which expect a separate `output_config.effort`. Models without `effort` hide/disable the selector and send no thinking fields. The chosen level is stored in `settings.json` and restored on the next start. Example: `"effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" }`.
 - If `label` is omitted, the CLI derives one automatically from `id`.
 - After changing [`models.json`](./models.json), restart the client.
 
@@ -237,7 +238,7 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 - `/profile <profile>` switches the active AWS profile for the running chat
 - `Left`/`Right`, `Home`/`End` and `Delete` edit the current input line; `Up`/`Down` recall previous inputs
 - `Esc` interrupts a running response without leaving the chat
-- `/model` opens the model selection menu; use `Up`/`Down` and `Enter` to switch
+- `/model` opens the model selection menu; use `Up`/`Down` and `Enter` to switch, and `Left`/`Right` to change the effort level (adaptive-thinking depth) for reasoning models
 - `/system` shows the active system prompt; `/system <text>` sets it, `/system reset` restores the default
 - `/debug` toggles request and error diagnostics; `/debug on` and `/debug off` set it explicitly
 - `/usage` shows current Amazon Bedrock billing costs from AWS Cost Explorer plus current session token usage

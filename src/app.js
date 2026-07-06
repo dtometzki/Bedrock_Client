@@ -1,6 +1,7 @@
 import {
   ANSI,
   formatAccountSummary,
+  formatEffortLabel,
   formatInteger,
   formatUsd,
   getPackageVersion,
@@ -11,13 +12,15 @@ import { SLASH_COMMANDS, printSlashCommands } from "./slash-commands.js";
 import { parseCliArgs, getCliOptionHelp, DEFAULT_SYSTEM_PROMPT } from "./cli-args.js";
 import {
   readLastModelId,
+  readSavedEffort,
   readSavedInferenceOverrides,
   writeLastModelId,
+  writeSavedEffort,
   writeSavedInferenceOverrides
 } from "./config.js";
 import { clearSession, readSession, writeSession } from "./session.js";
 import { appendAssistantResponse, countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
-import { findModel, getModelInvocationId, loadModels, resolveStartupModel } from "./models.js";
+import { findModel, getModelInvocationId, loadModels, normalizeEffort, resolveEffortLevel, resolveStartupModel } from "./models.js";
 import {
   formatProfileList,
   listAwsProfiles,
@@ -26,6 +29,7 @@ import {
   switchAwsProfile
 } from "./aws-context.js";
 import {
+  buildAdaptiveThinkingFields,
   buildInferenceConfig,
   createBedrockClient,
   formatBedrockErrorDiagnostics,
@@ -81,6 +85,8 @@ function formatDebugRequestLines({
   region,
   profile,
   inferenceConfig,
+  effort,
+  additionalModelRequestFields,
   historyMessages,
   requestMessages,
   system,
@@ -92,6 +98,8 @@ function formatDebugRequestLines({
     `AWS Profil: ${profile}`,
     `Region: ${region}`,
     `Inference Config: ${JSON.stringify(inferenceConfig)}`,
+    ...(effort ? [`Effort: ${effort}`] : []),
+    ...(additionalModelRequestFields ? [`Additional Fields: ${JSON.stringify(additionalModelRequestFields)}`] : []),
     `System Prompt: ${system ? `gesetzt (${system.length} Zeichen)` : "nicht gesetzt"}`,
     `Nachrichten: ${requestMessages.length} gesendet, ${historyMessages.length} im Verlauf`,
     `Verlauf-Limit: ${formatHistoryLimit(maxTurns)}`
@@ -274,24 +282,35 @@ async function handleCommand(input, ctx) {
 
   if (matchesCommand(input, "/model")) {
     const requestedModel = commandArg(input, "/model");
-    let selected = null;
+    let nextModel = null;
+    let nextEffort = ctx.effort;
     if (requestedModel) {
-      selected = findModel(ctx.models, requestedModel);
-      if (!selected) {
+      nextModel = findModel(ctx.models, requestedModel);
+      if (!nextModel) {
         console.error(`${ANSI.yellow}Modell nicht gefunden:${ANSI.reset} ${requestedModel}`);
         console.error(`${ANSI.gray}Verfuegbar: ${ctx.models.map((m) => m.label).join(", ")}${ANSI.reset}`);
         console.log(terminalLine());
         return { signal: "handled" };
       }
+      // Effort-Wunsch beibehalten, falls das neue Modell ihn unterstuetzt.
+      nextEffort = resolveEffortLevel(nextModel, ctx.effort);
     } else {
-      selected = await promptForModelSelection(ctx.models, ctx.modelId);
+      const selection = await promptForModelSelection(ctx.models, ctx.modelId, ctx.effort);
+      if (selection) {
+        nextModel = selection.model;
+        nextEffort = selection.effort;
+      }
     }
-    if (selected) {
-      ctx.modelId = selected.id;
-      ctx.currentModel = selected;
+    if (nextModel) {
+      ctx.modelId = nextModel.id;
+      ctx.currentModel = nextModel;
+      ctx.effort = nextEffort;
       ctx.inferenceConfig = buildInferenceConfig(ctx.currentModel, ctx.activeInferenceOverrides);
       tryPersist(() => writeLastModelId(ctx.modelId), "Modell speichern", ctx.debugMode);
-      console.log(`${ANSI.green}Modell:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}`);
+      tryPersist(() => writeSavedEffort(ctx.effort), "Effort speichern", ctx.debugMode);
+      const effortLabel = formatEffortLabel(ctx.effort);
+      const effortSuffix = effortLabel ? ` ${ANSI.gray}(Effort: ${effortLabel})${ANSI.reset}` : "";
+      console.log(`${ANSI.green}Modell:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}${effortSuffix}`);
       console.log(terminalLine());
     }
     return { signal: "handled" };
@@ -352,6 +371,10 @@ async function streamModelResponse(ctx, cliArgs, promptText) {
   process.stdout.write("\n");
 
   const bedrockModelId = getModelInvocationId(ctx.currentModel);
+  const effortConfig = normalizeEffort(ctx.currentModel);
+  const additionalModelRequestFields = effortConfig
+    ? buildAdaptiveThinkingFields(ctx.effort, effortConfig.style)
+    : undefined;
   const interrupter = createStreamInterruptController();
 
   let fullResponse = "";
@@ -379,6 +402,8 @@ async function streamModelResponse(ctx, cliArgs, promptText) {
         region: ctx.region,
         profile: process.env.AWS_PROFILE || "default",
         inferenceConfig: ctx.inferenceConfig,
+        effort: ctx.effort,
+        additionalModelRequestFields,
         historyMessages: ctx.messages,
         requestMessages,
         system: ctx.systemPrompt,
@@ -393,6 +418,7 @@ async function streamModelResponse(ctx, cliArgs, promptText) {
       messages: requestMessages,
       system: ctx.systemPrompt,
       inferenceConfig: ctx.inferenceConfig,
+      additionalModelRequestFields,
       abortSignal: interrupter.signal
     })) {
       if (event.type === "retry") {
@@ -546,15 +572,21 @@ export async function main() {
 
     const startupDebugMode = cliArgs.debug || isDebugEnvEnabled(process.env.BEDROCK_CHAT_DEBUG);
 
+    const savedEffort = readSavedEffort();
+    let startupEffort = savedEffort;
+
     if (!cliArgs.web && !cliArgs.model && !resumeModelId && !lastModelId && models.length > 1) {
-      const selected = await promptForModelSelection(models, modelId);
-      if (selected) {
-        modelId = selected.id;
+      const selection = await promptForModelSelection(models, modelId, savedEffort);
+      if (selection) {
+        modelId = selection.model.id;
+        startupEffort = selection.effort;
         tryPersist(() => writeLastModelId(modelId), "Modell speichern", startupDebugMode);
+        tryPersist(() => writeSavedEffort(startupEffort), "Effort speichern", startupDebugMode);
       }
     }
 
     const currentModel = findModel(models, modelId) ?? activeModel;
+    const effort = resolveEffortLevel(currentModel, startupEffort);
     const savedInferenceOverrides = readSavedInferenceOverrides();
     const activeInferenceOverrides = {
       ...savedInferenceOverrides,
@@ -591,13 +623,14 @@ export async function main() {
       debugMode: startupDebugMode,
       currentModel,
       modelId,
+      effort,
       inferenceConfig,
       region: startupContext.region,
       identityLabel: startupContext.identityLabel,
       bedrockClient: createBedrockClient({ region: startupContext.region })
     };
 
-    printStartupBanner({ model: ctx.currentModel, inferenceConfig: ctx.inferenceConfig });
+    printStartupBanner({ model: ctx.currentModel, inferenceConfig: ctx.inferenceConfig, effort: ctx.effort });
     if (ctx.debugMode) {
       printDebugStatus(ctx.debugMode);
     }
