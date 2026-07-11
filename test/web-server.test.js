@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
+import { readSavedEffort } from "../src/config.js";
+import { readSession } from "../src/session.js";
 import {
   buildAttachmentBlocks,
   getBrowserOpenCommand,
@@ -223,6 +228,29 @@ test("POST /api/effort setzt gueltiges Effort Level", async () => {
   });
 });
 
+test("Web-Effort wird initial wiederhergestellt und nach Aenderung gespeichert", async () => {
+  const previousConfigDir = process.env.BEDROCK_CHAT_CONFIG_DIR;
+  process.env.BEDROCK_CHAT_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-chat-web-effort-"));
+
+  try {
+    await withServer({
+      models: EFFORT_MODELS,
+      model: EFFORT_MODELS[0],
+      effort: "low",
+      persistEffortSelection: true
+    }, async ({ url }) => {
+      const initialState = await fetch(`${url}/api/state`).then((res) => res.json());
+      assert.equal(initialState.effort, "low");
+
+      await postJson(`${url}/api/effort`, { effort: "medium" });
+      assert.equal(readSavedEffort(), "medium");
+    });
+  } finally {
+    if (previousConfigDir == null) delete process.env.BEDROCK_CHAT_CONFIG_DIR;
+    else process.env.BEDROCK_CHAT_CONFIG_DIR = previousConfigDir;
+  }
+});
+
 test("POST /api/effort lehnt ungueltige Level und nicht unterstuetzte Modelle ab", async () => {
   await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[0] }, async ({ url }) => {
     const invalid = await postJson(`${url}/api/effort`, { effort: "turbo" });
@@ -310,7 +338,7 @@ test("POST /api/chat ohne Effort-Unterstuetzung sendet keine Thinking-Felder", a
   });
 });
 
-test("POST /api/model setzt Effort auf den Default des neuen Modells zurueck", async () => {
+test("POST /api/model behaelt ein kompatibles Effort Level modelluebergreifend", async () => {
   await withServer({ models: EFFORT_MODELS, model: EFFORT_MODELS[0] }, async ({ url, getState }) => {
     await postJson(`${url}/api/effort`, { effort: "low" });
     assert.equal(getState().effort, "low");
@@ -319,7 +347,7 @@ test("POST /api/model setzt Effort auf den Default des neuen Modells zurueck", a
     assert.equal(getState().effort, null);
 
     await postJson(`${url}/api/model`, { model: "reason-a" });
-    assert.equal(getState().effort, "high");
+    assert.equal(getState().effort, "low");
   });
 });
 
@@ -494,6 +522,37 @@ test("POST /api/chat akzeptiert Anhang ohne Text und lehnt ungueltige Anhaenge a
     assert.equal(response.status, 400);
     assert.match(data.error, /nicht unterstuetzt/);
   });
+});
+
+test("Auto-Save erhaelt reine Anhang-Turns als gueltige Text-History", async () => {
+  const previousConfigDir = process.env.BEDROCK_CHAT_CONFIG_DIR;
+  process.env.BEDROCK_CHAT_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-chat-web-session-"));
+
+  async function* fakeStream() {
+    yield { type: "text", text: "Datei ausgewertet" };
+  }
+
+  try {
+    await withServer({ autoSave: true, streamFn: fakeStream }, async ({ url }) => {
+      const response = await fetch(`${url}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "",
+          attachments: [{ name: "daten.csv", dataBase64: Buffer.from("a;b").toString("base64") }]
+        })
+      });
+      await response.text();
+
+      const saved = readSession();
+      assert.deepEqual(saved.messages.map((entry) => entry.role), ["user", "assistant"]);
+      assert.equal(saved.messages[0].content[0].text, "[Anhang: daten.csv]");
+      assert.deepEqual(saved.messages[0].attachmentNames, ["daten.csv"]);
+    });
+  } finally {
+    if (previousConfigDir == null) delete process.env.BEDROCK_CHAT_CONFIG_DIR;
+    else process.env.BEDROCK_CHAT_CONFIG_DIR = previousConfigDir;
+  }
 });
 
 test("isRequestAllowed schuetzt vor DNS-Rebinding und fremden Origins", () => {

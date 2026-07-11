@@ -215,7 +215,7 @@ npm test
 
 The test suite runs syntax checks and unit tests. It does not call your real AWS account.
 
-Optional style linting (downloads ESLint on demand, no dev dependency required):
+Optional style linting with the locally pinned ESLint version:
 
 ```bash
 npm run lint

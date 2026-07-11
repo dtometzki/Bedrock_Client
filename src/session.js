@@ -12,7 +12,11 @@ function isValidMessage(message) {
   return Boolean(message) &&
     (message.role === "user" || message.role === "assistant") &&
     Array.isArray(message.content) &&
-    message.content.every((block) => typeof block?.text === "string");
+    message.content.every((block) => typeof block?.text === "string") &&
+    (message.attachmentNames == null || (
+      Array.isArray(message.attachmentNames) &&
+      message.attachmentNames.every((name) => typeof name === "string")
+    ));
 }
 
 export function readSession() {

@@ -174,8 +174,34 @@ export function getRetryDelayMs(attempt, baseDelayMs = 500, maxDelayMs = 8000) {
   return Math.min(maxDelayMs, exponential + jitter);
 }
 
-function defaultSleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function createAbortError() {
+  const error = new Error("Anfrage abgebrochen.");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function defaultSleep(ms, abortSignal) {
+  throwIfAborted(abortSignal);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    function onAbort() {
+      clearTimeout(timeout);
+      reject(createAbortError());
+    }
+
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export async function* streamConverse(client, { modelId, messages, system, inferenceConfig = DEFAULT_INFERENCE_CONFIG, additionalModelRequestFields, abortSignal }) {
@@ -241,7 +267,10 @@ export async function* streamConverseWithRetry(client, params, {
       attempt += 1;
       const delayMs = getRetryDelayMs(attempt, baseDelayMs);
       yield { type: "retry", attempt, maxRetries, delayMs, error: err };
-      await sleep(delayMs);
+      await sleep(delayMs, params.abortSignal);
+      // Auch injizierte Sleep-Funktionen in Tests oder Integrationen muessen
+      // einen zwischenzeitlichen Abbruch respektieren.
+      throwIfAborted(params.abortSignal);
     }
   }
 }

@@ -487,6 +487,7 @@
     }
     el.messages.appendChild(wrap);
     scrollToBottom();
+    return wrap;
   }
 
   function renderAttachRow() {
@@ -514,6 +515,10 @@
   }
 
   async function addFiles(fileList) {
+    if (busy) {
+      alert("Während einer laufenden Anfrage können keine Anhänge hinzugefügt werden.");
+      return;
+    }
     for (const file of fileList) {
       if (pendingAttachments.length >= MAX_ATTACHMENTS) {
         alert("Maximal " + MAX_ATTACHMENTS + " Anhänge pro Nachricht.");
@@ -552,6 +557,7 @@
     el.effortSelect.disabled = value || !effortSupported;
     el.clearBtn.disabled = value;
     el.systemBtn.disabled = value;
+    el.attachBtn.disabled = value;
     if (!value) el.status.textContent = "";
   }
 
@@ -637,10 +643,11 @@
     renderAttachRow();
     el.input.value = "";
     el.input.style.height = "auto";
+    el.status.textContent = "";
     setBusy(true);
-    addUserMessage(text, attachments.map((attachment) => attachment.name));
+    const userWrap = addUserMessage(text, attachments.map((attachment) => attachment.name));
 
-    const { content } = addAssistantMessage();
+    const { wrap: assistantWrap, content } = addAssistantMessage();
     const cursor = document.createElement("span");
     cursor.className = "cursor";
     content.appendChild(cursor);
@@ -650,6 +657,7 @@
     let reasoning = "";
     let reasoningEl = null;
     let meta = null;
+    let failureMessage = "";
 
     const renderAnswer = () => {
       content.innerHTML = renderMarkdown(answer);
@@ -673,9 +681,10 @@
         el.status.textContent = "Erneuter Versuch " + event.attempt + "/" +
           event.maxRetries + " in " + event.delayMs + " ms…";
       } else if (event.type === "error") {
+        failureMessage = "API Fehler: " + event.message;
         const box = document.createElement("div");
         box.className = "error";
-        box.textContent = "API Fehler: " + event.message;
+        box.textContent = failureMessage;
         content.parentNode.appendChild(box);
       } else if (event.type === "done") {
         meta = event;
@@ -713,15 +722,36 @@
           } catch {}
         }
       }
+      if (!meta && !failureMessage) {
+        failureMessage = "Verbindung beendet, bevor die Antwort bestätigt wurde.";
+      }
     } catch (err) {
+      failureMessage = "Fehler: " + err.message;
       const box = document.createElement("div");
       box.className = "error";
-      box.textContent = "Fehler: " + err.message;
+      box.textContent = failureMessage;
       content.parentNode.appendChild(box);
     }
 
     cursor.remove();
     content.innerHTML = renderMarkdown(answer);
+
+    if (failureMessage || (meta && meta.failed)) {
+      userWrap.remove();
+      assistantWrap.remove();
+      if (!el.input.value) {
+        el.input.value = text;
+        el.input.dispatchEvent(new Event("input"));
+      }
+      pendingAttachments = [...attachments, ...pendingAttachments].slice(0, MAX_ATTACHMENTS);
+      renderAttachRow();
+      setBusy(false);
+      await loadState().catch(() => {});
+      el.status.textContent = failureMessage || "Nachricht konnte nicht gesendet werden.";
+      scrollToBottom();
+      el.input.focus();
+      return;
+    }
 
     const metaEl = document.createElement("div");
     metaEl.className = "meta";

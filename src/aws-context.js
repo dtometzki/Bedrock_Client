@@ -154,17 +154,30 @@ export function printAwsProfiles() {
   console.log(formatProfileList(listAwsProfiles()));
 }
 
-export function switchAwsProfile(profile) {
-  const profiles = listAwsProfiles();
+export function switchAwsProfile(profile, {
+  listProfiles = listAwsProfiles,
+  loadContext = loadAwsContext
+} = {}) {
+  const profiles = listProfiles();
   if (profiles.length && !profiles.includes(profile)) {
     throw new Error(`AWS Profil nicht gefunden: ${profile}\nVerfuegbar: ${profiles.join(", ")}`);
   }
 
+  const previousProfile = process.env.AWS_PROFILE;
   if (profile === "default") {
     delete process.env.AWS_PROFILE;
   } else {
     process.env.AWS_PROFILE = profile;
   }
 
-  return loadAwsContext();
+  try {
+    return loadContext();
+  } catch (err) {
+    if (previousProfile == null) {
+      delete process.env.AWS_PROFILE;
+    } else {
+      process.env.AWS_PROFILE = previousProfile;
+    }
+    throw err;
+  }
 }

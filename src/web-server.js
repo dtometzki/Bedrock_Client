@@ -9,10 +9,10 @@ import {
   isAbortError,
   streamConverseWithRetry
 } from "./bedrock.js";
-import { findModel, getModelInvocationId, normalizeEffort } from "./models.js";
+import { findModel, getModelInvocationId, normalizeEffort, resolveEffortLevel } from "./models.js";
 import { appendAssistantResponse, countHistoryTurns } from "./history.js";
 import { clearSession, writeSession } from "./session.js";
-import { writeLastModelId } from "./config.js";
+import { writeLastModelId, writeSavedEffort } from "./config.js";
 import { addUsageRecord, emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
 
 export const DEFAULT_WEB_PORT = 3456;
@@ -215,12 +215,23 @@ function toBedrockMessages(messages) {
 
 function toPersistableMessages(messages) {
   // Session-Dateien speichern nur Text-Bloecke; Anhaenge (Binaerdaten)
-  // werden beim Persistieren entfernt, der Nachrichtentext bleibt erhalten.
+  // werden beim Persistieren entfernt. Reine Anhang-Nachrichten erhalten einen
+  // Textplatzhalter, damit kein verwaistes Assistant-Element gespeichert wird.
   return messages
-    .map((message) => ({
-      role: message.role,
-      content: (message.content ?? []).filter((block) => typeof block.text === "string")
-    }))
+    .map((message) => {
+      const attachmentNames = Array.isArray(message.attachmentNames)
+        ? message.attachmentNames.filter((name) => typeof name === "string" && name)
+        : [];
+      const content = (message.content ?? []).filter((block) => typeof block.text === "string");
+      if (!content.length && attachmentNames.length) {
+        content.push({ text: `[Anhang${attachmentNames.length === 1 ? "" : "e"}: ${attachmentNames.join(", ")}]` });
+      }
+      return {
+        role: message.role,
+        content,
+        ...(attachmentNames.length && { attachmentNames })
+      };
+    })
     .filter((message) => message.content.length);
 }
 
@@ -242,6 +253,7 @@ export function createWebServer(options = {}) {
     model = null,
     client = null,
     inferenceOverrides = {},
+    effort = null,
     systemPrompt = "",
     region = "",
     identityLabel = "",
@@ -253,6 +265,7 @@ export function createWebServer(options = {}) {
     billingFn = loadCurrentBedrockBillingCost,
     indexHtmlPath = INDEX_HTML_URL,
     persistModelSelection = true,
+    persistEffortSelection = persistModelSelection,
     authToken = ""
   } = options;
 
@@ -260,12 +273,11 @@ export function createWebServer(options = {}) {
     throw new Error("Web-Server benoetigt ein aktives Modell.");
   }
 
-  const initialEffort = normalizeEffort(model);
-
   const state = {
     model,
     inferenceConfig: buildInferenceConfig(model, inferenceOverrides),
-    effort: initialEffort ? initialEffort.default : null,
+    effort: resolveEffortLevel(model, effort),
+    preferredEffort: effort,
     systemPrompt,
     messages: [...initialMessages],
     usageTotals: emptyUsageTotals(),
@@ -378,8 +390,7 @@ export function createWebServer(options = {}) {
     }
     state.model = selected;
     state.inferenceConfig = buildInferenceConfig(selected, inferenceOverrides);
-    const effortConfig = normalizeEffort(selected);
-    state.effort = effortConfig ? effortConfig.default : null;
+    state.effort = resolveEffortLevel(selected, state.preferredEffort);
     if (persistModelSelection) {
       try {
         writeLastModelId(selected.id);
@@ -406,6 +417,12 @@ export function createWebServer(options = {}) {
       return;
     }
     state.effort = requested;
+    state.preferredEffort = requested;
+    if (persistEffortSelection) {
+      try {
+        writeSavedEffort(requested);
+      } catch {}
+    }
     sendJson(res, 200, getStatePayload());
   }
 

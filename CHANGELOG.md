@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Keep attachment-only turns resumable by persisting a text placeholder and attachment names without binary data.
+- Make retry backoff abortable immediately via `Esc`/stop instead of waiting for the next attempt.
+- Roll back `AWS_PROFILE` when an in-session profile switch fails.
+- Restore and persist the web GUI effort preference consistently across compatible model switches.
+- Roll back optimistic web messages after request failures and restore their prompt and attachments.
+- Strip terminal control sequences from streamed model output and pin ESLint as a local development dependency.
+
 ## 1.11.0 - 2026-07-06
 
 - Bring the "Effort" (adaptive-thinking depth) control from the web GUI to the terminal client: the `/model` picker now shows an inline effort row for reasoning models that is changed with the left/right arrow keys, so model and effort are chosen in one menu.

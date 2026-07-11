@@ -40,7 +40,7 @@ import {
 import { createStreamInterruptController, promptForModelSelection, readPrompt } from "./prompt.js";
 import { exportHistoryToMarkdown } from "./export.js";
 import { DEFAULT_WEB_PORT, openInBrowser, startWebServer } from "./web-server.js";
-import { formatLine, resetResponseFormatting } from "./response-format.js";
+import { formatLine, resetResponseFormatting, sanitizeTerminalText } from "./response-format.js";
 import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
 
 function printHistorySummary(messages, maxTurns) {
@@ -438,7 +438,7 @@ async function streamModelResponse(ctx, promptText) {
           process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
           reasoningOpen = true;
         }
-        process.stdout.write(event.text);
+        process.stdout.write(sanitizeTerminalText(event.text));
         continue;
       }
       if (reasoningOpen) {
@@ -446,7 +446,7 @@ async function streamModelResponse(ctx, promptText) {
         reasoningOpen = false;
       }
 
-      const text = event.text;
+      const text = sanitizeTerminalText(event.text);
       fullResponse += text;
       lineBuffer += text;
 
@@ -662,6 +662,7 @@ export async function main() {
         maxTurns: cliArgs.maxTurns,
         autoSave: autoSaveEnabled,
         messages: ctx.messages,
+        effort: ctx.effort,
         port: cliArgs.port ?? DEFAULT_WEB_PORT
       });
       // Das Token schuetzt den lokalen Server davor, von anderen Prozessen auf

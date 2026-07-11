@@ -164,6 +164,31 @@ test("streamConverseWithRetry retries a retryable initial failure then succeeds"
   assert.equal(events[0].attempt, 1);
 });
 
+test("streamConverseWithRetry bricht eine laufende Retry-Wartezeit sofort ab", async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  const client = {
+    async send() {
+      attempts += 1;
+      const err = new Error("throttled");
+      err.name = "ThrottlingException";
+      throw err;
+    }
+  };
+
+  const iterator = streamConverseWithRetry(client, {
+    modelId: "model-a",
+    messages: [],
+    abortSignal: controller.signal
+  }, { baseDelayMs: 10_000 });
+
+  assert.equal((await iterator.next()).value.type, "retry");
+  const waiting = iterator.next();
+  controller.abort();
+  await assert.rejects(waiting, (err) => isAbortError(err));
+  assert.equal(attempts, 1);
+});
+
 test("streamConverseWithRetry does not retry after text was already yielded", async () => {
   let attempts = 0;
   const client = {
