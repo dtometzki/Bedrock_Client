@@ -6,3 +6,4 @@ dist/
 test-argv.js
 firebase-debug.log
 npm-debug.log*
+models.private.json
