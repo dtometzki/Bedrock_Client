@@ -375,13 +375,28 @@
   "use strict";
 
   // Der Server erwartet bei aktiviertem Auth-Token dessen Wert in jedem
-  // API-Request. Die Seite selbst wurde mit ?token=... geladen; wir lesen den
-  // Wert aus der eigenen URL und senden ihn als Header bei jedem fetch mit.
-  const AUTH_TOKEN = new URLSearchParams(location.search).get("token") || "";
+  // API-Request. Die Seite wird beim ersten Aufruf mit ?token=... geladen;
+  // danach lebt das Token nur noch in sessionStorage (uebersteht Reloads,
+  // endet mit dem Tab) und wird als Header bei jedem fetch mitgesendet.
+  const TOKEN_STORAGE_KEY = "bedrock-chat-token";
+  const urlToken = new URLSearchParams(location.search).get("token") || "";
+  let storedToken = "";
+  try {
+    if (urlToken) {
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, urlToken);
+    } else {
+      storedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || "";
+    }
+  } catch {
+    // sessionStorage nicht verfuegbar (z. B. blockiert): Nur URL-Token nutzen,
+    // ein Reload ohne ?token= verliert dann die API-Berechtigung.
+  }
+  const AUTH_TOKEN = urlToken || storedToken;
 
   // Token aus der Adresszeile entfernen, damit es nicht in der Browser-History
-  // oder in kopierten Links landet. Fuer die API-Requests reicht die Konstante.
-  if (AUTH_TOKEN && window.history?.replaceState) {
+  // oder in kopierten Links landet. Reloads funktionieren ueber sessionStorage,
+  // die Index-Seite selbst ist serverseitig ohne Token erreichbar.
+  if (urlToken && window.history?.replaceState) {
     const cleanUrl = new URL(location.href);
     cleanUrl.searchParams.delete("token");
     window.history.replaceState(null, "", cleanUrl.toString());

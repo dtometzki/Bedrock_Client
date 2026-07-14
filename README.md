@@ -164,6 +164,8 @@ Notes:
 
 Add new models in [`models.json`](./models.json). Each entry needs an AWS Bedrock model ID in `id`. `label` is optional, but recommended because it is shown in the interactive selection and can also be used with `-m` / `--model`.
 
+You can also keep a personal model list outside the package: if `models.json` exists in the user config directory (`~/.config/bedrock-chat/models.json`, or `$BEDROCK_CHAT_CONFIG_DIR/models.json`), it completely replaces the bundled file. This is the recommended place for account-specific entries such as `profileArn` values, so they never end up in a published package or repository.
+
 Example:
 
 ```json

@@ -583,13 +583,18 @@ export function createWebServer(options = {}) {
     }
 
     const url = new URL(req.url, "http://localhost");
-    if (!isTokenValid(req, url, authToken)) {
+    const { pathname } = url;
+    const route = `${req.method} ${pathname}`;
+
+    // Die Index-Seite ist statisches HTML ohne Geheimnisse und bleibt ohne
+    // Token erreichbar (Host-/Origin-Pruefung oben gilt weiterhin). So
+    // funktioniert ein Browser-Reload, nachdem die GUI das Token aus der URL
+    // entfernt und in sessionStorage uebernommen hat. Alle API-Routen, die
+    // Kosten verursachen oder Verlauf preisgeben, verlangen das Token.
+    if (route !== "GET /" && !isTokenValid(req, url, authToken)) {
       sendJson(res, 403, { error: "Ungueltiges oder fehlendes Token." });
       return;
     }
-
-    const { pathname } = url;
-    const route = `${req.method} ${pathname}`;
 
     const handler = {
       "GET /": () => handleIndex(res),

@@ -1,7 +1,7 @@
 import readline from "node:readline";
 import * as readlinePromises from "node:readline/promises";
 import { ANSI, formatEffortLabel, terminalLine } from "./ui.js";
-import { normalizeEffort, resolveEffortLevel } from "./models.js";
+import { modelMatches, normalizeEffort, resolveEffortLevel } from "./models.js";
 import {
   completeSlashCommand,
   formatSlashCommandLines,
@@ -11,15 +11,8 @@ import {
   isCompleteSlashCommand
 } from "./slash-commands.js";
 
-function isCurrentModel(model, currentModelId) {
-  return model.id === currentModelId ||
-    model.profileArn === currentModelId ||
-    model.inferenceProfileArn === currentModelId ||
-    model.aliases?.includes(currentModelId);
-}
-
 function getInitialModelSelectionIndex(models, currentModelId) {
-  const index = models.findIndex((model) => isCurrentModel(model, currentModelId));
+  const index = models.findIndex((model) => modelMatches(model, currentModelId));
   return index >= 0 ? index : 0;
 }
 
@@ -45,7 +38,7 @@ export function formatModelSelectionLines(models, currentModelId, selectedIndex 
   models.forEach((model, index) => {
     const marker = index === selectedIndex ? ">" : " ";
     const number = `[${index + 1}]`;
-    const active = isCurrentModel(model, currentModelId) ? " (aktiv)" : "";
+    const active = modelMatches(model, currentModelId) ? " (aktiv)" : "";
     const line = `${marker} ${number} ${model.label}${active}`;
 
     if (index === selectedIndex) {
@@ -204,6 +197,17 @@ function longestCommonPrefix(values) {
   return prefix;
 }
 
+// Bracketed-Paste-Steuersequenzen: Das Terminal rahmt eingefuegten Text mit
+// ESC[200~ / ESC[201~ ein (Node meldet sie als key.name "paste-start"/"paste-end").
+// So laesst sich mehrzeiliges Einfuegen von echten Enter-Tastendruecken
+// unterscheiden und loest kein vorzeitiges Absenden aus.
+const BRACKETED_PASTE_ON = "\u001b[?2004h";
+const BRACKETED_PASTE_OFF = "\u001b[?2004l";
+
+// Hinweis/Grenze: Die Cursor-Arithmetik zaehlt UTF-16-Code-Units, nicht
+// Terminalspalten. Bei Emoji oder ostasiatischen Breitzeichen kann die
+// Cursorposition daher optisch verrutschen; der eingegebene Text selbst
+// bleibt korrekt.
 export async function readPrompt({ history = [] } = {}) {
   if (!process.stdin.isTTY) {
     const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
@@ -218,18 +222,29 @@ export async function readPrompt({ history = [] } = {}) {
   const wasRaw = process.stdin.isRaw;
   process.stdin.setRawMode(true);
   process.stdin.resume();
+  process.stdout.write(BRACKETED_PASTE_ON);
 
   return await new Promise((resolve) => {
     let line = "";
     let cursor = 0;
     let selectedSlashIndex = 0;
     let done = false;
+    let pasting = false;
 
     let historyIndex = history.length;
     let historyDraft = "";
 
     const promptVisibleColumns = 2;
     const promptText = `${ANSI.bold}>${ANSI.reset} `;
+
+    // Zeilenumbrueche einzeilig als ⏎ darstellen, damit die Cursor-Spalten-
+    // Berechnung und das Loeschen der Anzeige (eine Terminalzeile) stimmen.
+    // Der tatsaechliche Eingabewert behaelt die echten "\n".
+    function displayLine() {
+      return line
+        .replace(/\n/g, `${ANSI.gray}⏎${ANSI.reset}`)
+        .replace(/\t/g, " ");
+    }
 
     function slashSuggestionLines() {
       return line.startsWith("/") ? formatSlashCommandLines(line, selectedSlashIndex) : [];
@@ -252,7 +267,7 @@ export async function readPrompt({ history = [] } = {}) {
       clampSlashSelection();
       const suggestions = slashSuggestionLines();
       process.stdout.write("\r\u001b[0J");
-      process.stdout.write(`${promptText}${line}`);
+      process.stdout.write(`${promptText}${displayLine()}`);
       if (suggestions.length) {
         process.stdout.write(`\n${suggestions.join("\n")}`);
         process.stdout.write(`\u001b[${suggestions.length}A`);
@@ -297,9 +312,10 @@ export async function readPrompt({ history = [] } = {}) {
       if (done) return;
       done = true;
       process.stdin.off("keypress", onKeypress);
+      process.stdout.write(BRACKETED_PASTE_OFF);
       process.stdout.write("\r\u001b[0J");
       if (value !== null) {
-        process.stdout.write(`${promptText}${line}\n`);
+        process.stdout.write(`${promptText}${displayLine()}\n`);
       }
       if (!wasRaw) {
         process.stdin.setRawMode(false);
@@ -359,6 +375,29 @@ export async function readPrompt({ history = [] } = {}) {
     }
 
     function onKeypress(str, key = {}) {
+      if (key.name === "paste-start") {
+        pasting = true;
+        return;
+      }
+      if (key.name === "paste-end") {
+        pasting = false;
+        // Waehrend des Einfuegens wird nicht gerendert (O(n) statt O(n^2)
+        // Terminal-Writes bei grossen Pastes); einmal am Ende reicht.
+        render();
+        return;
+      }
+      if (pasting) {
+        // Eingefuegter Text ist Inhalt, keine Steuerung: Enter/Newline wird
+        // als Zeilenumbruch uebernommen statt den Prompt abzusenden.
+        if (key.name === "return" || key.name === "enter" || str === "\n" || str === "\r") {
+          insertText("\n");
+          return;
+        }
+        if (str && !key.ctrl && !key.meta) {
+          insertText(str);
+        }
+        return;
+      }
       if (key.ctrl && key.name === "c") {
         cleanup(null);
         return;

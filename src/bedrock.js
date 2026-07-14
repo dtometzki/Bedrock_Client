@@ -1,8 +1,13 @@
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
 
+// Einzige Quelle fuer die Inference-Defaults; cli-args.js re-exportiert sie
+// fuer die Argument-Verarbeitung, damit die Werte nicht auseinanderdriften.
+export const DEFAULT_MAX_TOKENS = 2000;
+export const DEFAULT_TEMPERATURE = 0.7;
+
 export const DEFAULT_INFERENCE_CONFIG = {
-  maxTokens: 2000,
-  temperature: 0.7
+  maxTokens: DEFAULT_MAX_TOKENS,
+  temperature: DEFAULT_TEMPERATURE
 };
 
 export function createBedrockClient({ region } = {}) {

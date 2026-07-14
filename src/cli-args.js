@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import { parseArgs } from "node:util";
+import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from "./bedrock.js";
 
 export const DEFAULT_SYSTEM_PROMPT = "Du bist ein hilfreicher KI-Assistent.";
-export const DEFAULT_MAX_TOKENS = 2000;
-export const DEFAULT_TEMPERATURE = 0.7;
+export { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE };
 export const DEFAULT_MAX_HISTORY_TURNS = 20;
 
 // Einzige Quelle fuer die Hilfetexte der CLI-Optionen, damit sie nicht von den

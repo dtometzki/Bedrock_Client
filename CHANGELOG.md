@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Support a user-level `models.json` in the config directory (`~/.config/bedrock-chat/models.json` or `$BEDROCK_CHAT_CONFIG_DIR/models.json`) that overrides the bundled file, so account-specific entries like `profileArn` stay out of the package.
+- Keep the CLI effort preference sticky across models without effort support: switching to such a model no longer deletes the saved effort, and switching back restores the previous choice (matching the web GUI behavior).
+- Handle bracketed paste in the terminal prompt: multi-line pasted text is inserted as one prompt (newlines shown as `⏎`) instead of submitting on the first line break.
+- Serve the web GUI index page without the auth token and keep the token in `sessionStorage`, so a browser reload works after the token is stripped from the URL; all `/api/*` routes still require the token.
+- Deduplicate model matching (`modelMatches` shared by `findModel` and the model picker) and the inference defaults (single source in `src/bedrock.js`).
 - Keep attachment-only turns resumable by persisting a text placeholder and attachment names without binary data.
 - Make retry backoff abortable immediately via `Esc`/stop instead of waiting for the next attempt.
 - Roll back `AWS_PROFILE` when an in-session profile switch fails.

@@ -1,4 +1,24 @@
 import fs from "node:fs";
+import path from "node:path";
+import { getConfigDir } from "./config.js";
+
+// Pfad zu einer optionalen, nutzereigenen models.json im Konfigurationsverzeichnis
+// (~/.config/bedrock-chat/models.json). Sie ueberschreibt die mitgelieferte Datei
+// komplett, damit account-spezifische Eintraege (z. B. Inference-Profile-ARNs)
+// nicht im npm-Paket landen muessen.
+export function getUserModelsPath() {
+  return path.join(getConfigDir(), "models.json");
+}
+
+export function resolveModelsPath(defaultPath) {
+  const userPath = getUserModelsPath();
+  try {
+    if (fs.existsSync(userPath)) {
+      return userPath;
+    }
+  } catch {}
+  return defaultPath;
+}
 
 export function normalizeModel(model, index = 0) {
   if (!model || typeof model !== "object" || !model.id) {
@@ -66,15 +86,22 @@ export function loadModels(modelsPath) {
   return models;
 }
 
-export function findModel(models, requestedModel) {
-  if (!requestedModel) return null;
-  return models.find((model) => (
+// Einzige Quelle fuer die Frage "bezeichnet dieser Wert dieses Modell?".
+// Wird von findModel und der Modellauswahl (prompt.js) gemeinsam genutzt,
+// damit die Matching-Regeln nicht auseinanderdriften.
+export function modelMatches(model, requestedModel) {
+  return Boolean(model) && (
     model.id === requestedModel ||
     model.label === requestedModel ||
     model.profileArn === requestedModel ||
     model.inferenceProfileArn === requestedModel ||
-    model.aliases?.includes(requestedModel)
-  )) ?? null;
+    Boolean(model.aliases?.includes(requestedModel))
+  );
+}
+
+export function findModel(models, requestedModel) {
+  if (!requestedModel) return null;
+  return models.find((model) => modelMatches(model, requestedModel)) ?? null;
 }
 
 export function formatModelChoices(models) {

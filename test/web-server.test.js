@@ -678,6 +678,15 @@ test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => 
 
     const allowedQuery = await fetch(`${url}/api/state?token=${authToken}`);
     assert.equal(allowedQuery.status, 200);
+
+    // Die Index-Seite (statisches HTML ohne Geheimnisse) bleibt ohne Token
+    // erreichbar, damit ein Reload nach dem Entfernen des Tokens aus der URL
+    // funktioniert. Alle anderen Routen verlangen weiterhin das Token.
+    const indexWithoutToken = await fetch(`${url}/`);
+    assert.notEqual(indexWithoutToken.status, 403);
+
+    const abortDenied = await fetch(`${url}/api/abort`, { method: "POST" });
+    assert.equal(abortDenied.status, 403);
   } finally {
     server.close();
   }

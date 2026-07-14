@@ -14,7 +14,7 @@ import {
   writeSavedInferenceOverrides
 } from "../src/config.js";
 import { countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "../src/history.js";
-import { findModel, getModelInvocationId, loadModels, normalizeEffort, normalizeModel, resolveEffortLevel, resolveStartupModel } from "../src/models.js";
+import { findModel, getModelInvocationId, getUserModelsPath, loadModels, modelMatches, normalizeEffort, normalizeModel, resolveEffortLevel, resolveModelsPath, resolveStartupModel } from "../src/models.js";
 
 function message(role, text) {
   return { role, content: [{ text }] };
@@ -90,6 +90,45 @@ test("disabled models are not loaded", () => {
   ]), "utf8");
 
   assert.deepEqual(loadModels(modelsPath).map((model) => model.id), ["model-a"]);
+});
+
+test("modelMatches matches id, label, ARNs and aliases", () => {
+  const model = normalizeModel({
+    id: "global.model-a",
+    label: "Model A",
+    aliases: ["old-model-a"],
+    profileArn: "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/global.model-a"
+  });
+
+  assert.equal(modelMatches(model, "global.model-a"), true);
+  assert.equal(modelMatches(model, "Model A"), true);
+  assert.equal(modelMatches(model, model.profileArn), true);
+  assert.equal(modelMatches(model, "old-model-a"), true);
+  assert.equal(modelMatches(model, "unbekannt"), false);
+  assert.equal(modelMatches(null, "global.model-a"), false);
+});
+
+test("a user models.json in the config directory overrides the bundled file", () => {
+  const previousConfigDir = process.env.BEDROCK_CHAT_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-chat-test-"));
+  const defaultPath = "/pfad/zur/mitgelieferten/models.json";
+
+  try {
+    process.env.BEDROCK_CHAT_CONFIG_DIR = configDir;
+
+    // Ohne Nutzerdatei bleibt der Default-Pfad aktiv.
+    assert.equal(resolveModelsPath(defaultPath), defaultPath);
+
+    fs.writeFileSync(getUserModelsPath(), JSON.stringify([{ id: "user-model" }]), "utf8");
+    assert.equal(resolveModelsPath(defaultPath), getUserModelsPath());
+    assert.deepEqual(loadModels(resolveModelsPath(defaultPath)).map((model) => model.id), ["user-model"]);
+  } finally {
+    if (previousConfigDir == null) {
+      delete process.env.BEDROCK_CHAT_CONFIG_DIR;
+    } else {
+      process.env.BEDROCK_CHAT_CONFIG_DIR = previousConfigDir;
+    }
+  }
 });
 
 test("history is trimmed by completed chat turns", () => {

@@ -20,7 +20,7 @@ import {
 } from "./config.js";
 import { clearSession, readSession, writeSession } from "./session.js";
 import { appendAssistantResponse, countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
-import { findModel, getModelInvocationId, loadModels, normalizeEffort, resolveEffortLevel, resolveStartupModel } from "./models.js";
+import { findModel, getModelInvocationId, loadModels, normalizeEffort, resolveEffortLevel, resolveModelsPath, resolveStartupModel } from "./models.js";
 import {
   formatProfileList,
   listAwsProfiles,
@@ -293,9 +293,11 @@ async function handleCommand(input, ctx) {
         return { signal: "handled" };
       }
       // Effort-Wunsch beibehalten, falls das neue Modell ihn unterstuetzt.
-      nextEffort = resolveEffortLevel(nextModel, ctx.effort);
+      // ctx.preferredEffort bleibt auch ueber Modelle ohne Effort hinweg
+      // erhalten (sticky), damit die Wahl beim Zurueckwechseln nicht verloren geht.
+      nextEffort = resolveEffortLevel(nextModel, ctx.preferredEffort);
     } else {
-      const selection = await promptForModelSelection(ctx.models, ctx.modelId, ctx.effort);
+      const selection = await promptForModelSelection(ctx.models, ctx.modelId, ctx.preferredEffort);
       if (selection) {
         nextModel = selection.model;
         nextEffort = selection.effort;
@@ -307,7 +309,13 @@ async function handleCommand(input, ctx) {
       ctx.effort = nextEffort;
       ctx.inferenceConfig = buildInferenceConfig(ctx.currentModel, ctx.activeInferenceOverrides);
       tryPersist(() => writeLastModelId(ctx.modelId), "Modell speichern", ctx.debugMode);
-      tryPersist(() => writeSavedEffort(ctx.effort), "Effort speichern", ctx.debugMode);
+      // Nur speichern, wenn das Modell Effort unterstuetzt. writeSavedEffort(null)
+      // wuerde die gespeicherte Praeferenz loeschen, obwohl der Nutzer sie beim
+      // naechsten Effort-Modell wieder erwartet.
+      if (nextEffort) {
+        ctx.preferredEffort = nextEffort;
+        tryPersist(() => writeSavedEffort(nextEffort), "Effort speichern", ctx.debugMode);
+      }
       const effortLabel = formatEffortLabel(ctx.effort);
       const effortSuffix = effortLabel ? ` ${ANSI.gray}(Effort: ${effortLabel})${ANSI.reset}` : "";
       console.log(`${ANSI.green}Modell:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}${effortSuffix}`);
@@ -545,7 +553,9 @@ export async function main() {
       return;
     }
 
-    const modelsPath = new URL("../models.json", import.meta.url);
+    // Eine nutzereigene ~/.config/bedrock-chat/models.json hat Vorrang vor der
+    // mitgelieferten Datei (account-spezifische ARNs gehoeren nicht ins Paket).
+    const modelsPath = resolveModelsPath(new URL("../models.json", import.meta.url));
     const models = loadModels(modelsPath);
 
     if (cliArgs.help) {
@@ -579,9 +589,11 @@ export async function main() {
       const selection = await promptForModelSelection(models, modelId, savedEffort);
       if (selection) {
         modelId = selection.model.id;
-        startupEffort = selection.effort;
+        startupEffort = selection.effort ?? startupEffort;
         tryPersist(() => writeLastModelId(modelId), "Modell speichern", startupDebugMode);
-        tryPersist(() => writeSavedEffort(startupEffort), "Effort speichern", startupDebugMode);
+        if (selection.effort) {
+          tryPersist(() => writeSavedEffort(selection.effort), "Effort speichern", startupDebugMode);
+        }
       }
     }
 
@@ -624,6 +636,9 @@ export async function main() {
       currentModel,
       modelId,
       effort,
+      // Effort-Wunsch des Nutzers, unabhaengig davon, ob das aktuelle Modell
+      // ihn unterstuetzt (analog zu preferredEffort im Web-Server).
+      preferredEffort: effort ?? startupEffort,
       inferenceConfig,
       region: startupContext.region,
       identityLabel: startupContext.identityLabel,
@@ -667,6 +682,9 @@ export async function main() {
       });
       // Das Token schuetzt den lokalen Server davor, von anderen Prozessen auf
       // dem Rechner angesteuert zu werden (die echte Bedrock-Kosten verursachen).
+      // Bewusster Kompromiss: Beim automatischen Oeffnen ist die URL samt Token
+      // kurzzeitig in der Prozessliste (ps) sichtbar. Die GUI entfernt das Token
+      // sofort aus der Adresszeile und haelt es nur in sessionStorage.
       const guiUrl = authToken ? `${url}/?token=${authToken}` : url;
       console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${guiUrl}`);
       if (!cliArgs.noOpen) {
