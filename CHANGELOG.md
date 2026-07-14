@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.12.0 - 2026-07-14
 
 - Support a user-level `models.json` in the config directory (`~/.config/bedrock-chat/models.json` or `$BEDROCK_CHAT_CONFIG_DIR/models.json`) that overrides the bundled file, so account-specific entries like `profileArn` stay out of the package.
 - Keep the CLI effort preference sticky across models without effort support: switching to such a model no longer deletes the saved effort, and switching back restores the previous choice (matching the web GUI behavior).
