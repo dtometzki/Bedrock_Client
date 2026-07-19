@@ -49,7 +49,7 @@ test("buildInferenceConfig applies topP and stopSequences overrides", () => {
     topP: 0.5,
     stopSequences: ["STOP"]
   }), {
-    maxTokens: 2000,
+    maxTokens: 4096,
     temperature: 0.7,
     topP: 0.5,
     stopSequences: ["STOP"]

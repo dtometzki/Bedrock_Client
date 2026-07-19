@@ -164,175 +164,197 @@ function stripRetryPair(messages, prompt) {
 //   { signal: "break" }               -> Chat beenden
 //   { signal: "handled" }             -> Eingabe erledigt, naechster Prompt
 //   { signal: "run", promptText }     -> Text an das Modell senden
-async function handleCommand(input, ctx) {
-  if (input === "/exit") {
-    return { signal: "break" };
-  }
 
-  if (input === "/" || input === "/help") {
-    printSlashCommands(input);
-    return { signal: "handled" };
-  }
+async function cmdExit() {
+  return { signal: "break" };
+}
 
-  if (input === "/clear") {
-    ctx.messages = [];
-    clearSessionIfEnabled(ctx);
-    console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
-    console.log(terminalLine());
-    return { signal: "handled" };
-  }
+async function cmdHelp(input) {
+  printSlashCommands(input);
+  return { signal: "handled" };
+}
 
-  if (matchesCommand(input, "/system")) {
-    const value = commandArg(input, "/system");
-    if (!value) {
-      printSystemStatus(ctx.systemPrompt);
-      return { signal: "handled" };
-    }
-    if (["reset", "clear", "default"].includes(value.toLowerCase())) {
-      ctx.systemPrompt = value.toLowerCase() === "clear" ? "" : DEFAULT_SYSTEM_PROMPT;
-    } else {
-      ctx.systemPrompt = value;
-    }
+async function cmdClear(_input, ctx) {
+  ctx.messages = [];
+  clearSessionIfEnabled(ctx);
+  console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
+  console.log(terminalLine());
+  return { signal: "handled" };
+}
+
+async function cmdSystem(input, ctx) {
+  const value = commandArg(input, "/system");
+  if (!value) {
     printSystemStatus(ctx.systemPrompt);
     return { signal: "handled" };
   }
+  if (["reset", "clear", "default"].includes(value.toLowerCase())) {
+    ctx.systemPrompt = value.toLowerCase() === "clear" ? "" : DEFAULT_SYSTEM_PROMPT;
+  } else {
+    ctx.systemPrompt = value;
+  }
+  printSystemStatus(ctx.systemPrompt);
+  return { signal: "handled" };
+}
 
-  if (matchesCommand(input, "/debug")) {
-    const nextDebugMode = parseDebugCommand(input, ctx.debugMode);
-    if (nextDebugMode === null) {
-      console.error(`${ANSI.yellow}Ungueltiger Debug-Wert:${ANSI.reset} ${commandArg(input, "/debug")}`);
-      console.error(`${ANSI.gray}Nutze /debug, /debug on oder /debug off.${ANSI.reset}`);
-      console.log(terminalLine());
-      return { signal: "handled" };
-    }
-    ctx.debugMode = nextDebugMode;
-    printDebugStatus(ctx.debugMode);
+async function cmdDebug(input, ctx) {
+  const nextDebugMode = parseDebugCommand(input, ctx.debugMode);
+  if (nextDebugMode === null) {
+    console.error(`${ANSI.yellow}Ungueltiger Debug-Wert:${ANSI.reset} ${commandArg(input, "/debug")}`);
+    console.error(`${ANSI.gray}Nutze /debug, /debug on oder /debug off.${ANSI.reset}`);
+    console.log(terminalLine());
     return { signal: "handled" };
   }
+  ctx.debugMode = nextDebugMode;
+  printDebugStatus(ctx.debugMode);
+  return { signal: "handled" };
+}
 
-  if (input === "/usage") {
-    await printUsageSummary(ctx.usageTotals);
+async function cmdUsage(_input, ctx) {
+  await printUsageSummary(ctx.usageTotals);
+  return { signal: "handled" };
+}
+
+async function cmdExport(input, ctx) {
+  if (!ctx.messages.length) {
+    console.log(`${ANSI.gray}Kein Verlauf zum Exportieren.${ANSI.reset}`);
+    console.log(terminalLine());
     return { signal: "handled" };
   }
+  const targetPath = commandArg(input, "/export");
+  try {
+    const exportedPath = exportHistoryToMarkdown(ctx.messages, targetPath, {
+      modelLabel: ctx.currentModel.label || ctx.modelId,
+      systemPrompt: ctx.systemPrompt
+    });
+    console.log(`${ANSI.green}Exportiert:${ANSI.reset} ${exportedPath}`);
+  } catch (err) {
+    console.error(`${ANSI.yellow}Export fehlgeschlagen: ${err.message}${ANSI.reset}`);
+  }
+  console.log(terminalLine());
+  return { signal: "handled" };
+}
 
-  if (matchesCommand(input, "/export")) {
-    if (!ctx.messages.length) {
-      console.log(`${ANSI.gray}Kein Verlauf zum Exportieren.${ANSI.reset}`);
-      console.log(terminalLine());
-      return { signal: "handled" };
-    }
-    const targetPath = commandArg(input, "/export");
-    try {
-      const exportedPath = exportHistoryToMarkdown(ctx.messages, targetPath, {
-        modelLabel: ctx.currentModel.label || ctx.modelId,
-        systemPrompt: ctx.systemPrompt
-      });
-      console.log(`${ANSI.green}Exportiert:${ANSI.reset} ${exportedPath}`);
-    } catch (err) {
-      console.error(`${ANSI.yellow}Export fehlgeschlagen: ${err.message}${ANSI.reset}`);
-    }
+async function cmdHistory(_input, ctx) {
+  printHistorySummary(ctx.messages, ctx.maxTurns);
+  return { signal: "handled" };
+}
+
+async function cmdAccount(_input, ctx) {
+  console.log(formatAccountSummary({
+    profile: process.env.AWS_PROFILE || "default",
+    region: ctx.region,
+    identityLabel: ctx.identityLabel
+  }).join("\n"));
+  console.log(terminalLine());
+  return { signal: "handled" };
+}
+
+async function cmdProfile(input, ctx) {
+  const requestedProfile = commandArg(input, "/profile");
+  if (!requestedProfile) {
+    console.log(`${ANSI.green}AWS Profile:${ANSI.reset} ${formatProfileList(listAwsProfiles())}`);
+    console.log(`${ANSI.green}Aktiv:${ANSI.reset} ${ctx.identityLabel || process.env.AWS_PROFILE || "default"}`);
     console.log(terminalLine());
     return { signal: "handled" };
   }
 
-  if (input === "/history") {
-    printHistorySummary(ctx.messages, ctx.maxTurns);
-    return { signal: "handled" };
+  try {
+    const nextContext = switchAwsProfile(requestedProfile);
+    ctx.region = nextContext.region;
+    ctx.identityLabel = nextContext.identityLabel;
+    ctx.bedrockClient = createBedrockClient({ region: ctx.region });
+    ctx.messages = [];
+    clearSessionIfEnabled(ctx);
+    console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
+    if (ctx.identityLabel) {
+      console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${ctx.identityLabel}`);
+    }
+    console.log(`${ANSI.green}Region:${ANSI.reset} ${ctx.region}`);
+    console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
+    console.log(terminalLine());
+  } catch (err) {
+    console.error(`${ANSI.yellow}${err.message}${ANSI.reset}`);
+    console.log(terminalLine());
   }
+  return { signal: "handled" };
+}
 
-  if (input === "/account") {
-    console.log(formatAccountSummary({
-      profile: process.env.AWS_PROFILE || "default",
-      region: ctx.region,
-      identityLabel: ctx.identityLabel
-    }).join("\n"));
+async function cmdModel(input, ctx) {
+  const requestedModel = commandArg(input, "/model");
+  let nextModel = null;
+  let nextEffort = ctx.effort;
+  if (requestedModel) {
+    nextModel = findModel(ctx.models, requestedModel);
+    if (!nextModel) {
+      console.error(`${ANSI.yellow}Modell nicht gefunden:${ANSI.reset} ${requestedModel}`);
+      console.error(`${ANSI.gray}Verfuegbar: ${ctx.models.map((m) => m.label).join(", ")}${ANSI.reset}`);
+      console.log(terminalLine());
+      return { signal: "handled" };
+    }
+    // Effort-Wunsch beibehalten, falls das neue Modell ihn unterstuetzt.
+    // ctx.preferredEffort bleibt auch ueber Modelle ohne Effort hinweg
+    // erhalten (sticky), damit die Wahl beim Zurueckwechseln nicht verloren geht.
+    nextEffort = resolveEffortLevel(nextModel, ctx.preferredEffort);
+  } else {
+    const selection = await promptForModelSelection(ctx.models, ctx.modelId, ctx.preferredEffort);
+    if (selection) {
+      nextModel = selection.model;
+      nextEffort = selection.effort;
+    }
+  }
+  if (nextModel) {
+    ctx.modelId = nextModel.id;
+    ctx.currentModel = nextModel;
+    ctx.effort = nextEffort;
+    ctx.inferenceConfig = buildInferenceConfig(ctx.currentModel, ctx.activeInferenceOverrides);
+    tryPersist(() => writeLastModelId(ctx.modelId), "Modell speichern", ctx.debugMode);
+    // Nur speichern, wenn das Modell Effort unterstuetzt. writeSavedEffort(null)
+    // wuerde die gespeicherte Praeferenz loeschen, obwohl der Nutzer sie beim
+    // naechsten Effort-Modell wieder erwartet.
+    if (nextEffort) {
+      ctx.preferredEffort = nextEffort;
+      tryPersist(() => writeSavedEffort(nextEffort), "Effort speichern", ctx.debugMode);
+    }
+    const effortLabel = formatEffortLabel(ctx.effort);
+    const effortSuffix = effortLabel ? ` ${ANSI.gray}(Effort: ${effortLabel})${ANSI.reset}` : "";
+    console.log(`${ANSI.green}Modell:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}${effortSuffix}`);
+    console.log(terminalLine());
+  }
+  return { signal: "handled" };
+}
+
+async function cmdRetry(_input, ctx) {
+  if (!ctx.lastPrompt) {
+    console.error(`${ANSI.yellow}Kein vorheriger Prompt zum Wiederholen.${ANSI.reset}`);
     console.log(terminalLine());
     return { signal: "handled" };
   }
+  ctx.messages = stripRetryPair(ctx.messages, ctx.lastPrompt);
+  console.log(`${ANSI.gray}Wiederhole: ${ctx.lastPrompt}${ANSI.reset}`);
+  return { signal: "run", promptText: ctx.lastPrompt };
+}
 
-  if (matchesCommand(input, "/profile")) {
-    const requestedProfile = commandArg(input, "/profile");
-    if (!requestedProfile) {
-      console.log(`${ANSI.green}AWS Profile:${ANSI.reset} ${formatProfileList(listAwsProfiles())}`);
-      console.log(`${ANSI.green}Aktiv:${ANSI.reset} ${ctx.identityLabel || process.env.AWS_PROFILE || "default"}`);
-      console.log(terminalLine());
-      return { signal: "handled" };
-    }
+const COMMAND_DISPATCH = [
+  { match: (i) => i === "/exit", handle: cmdExit },
+  { match: (i) => i === "/" || i === "/help", handle: cmdHelp },
+  { match: (i) => i === "/clear", handle: cmdClear },
+  { match: (i) => matchesCommand(i, "/system"), handle: cmdSystem },
+  { match: (i) => matchesCommand(i, "/debug"), handle: cmdDebug },
+  { match: (i) => i === "/usage", handle: cmdUsage },
+  { match: (i) => matchesCommand(i, "/export"), handle: cmdExport },
+  { match: (i) => i === "/history", handle: cmdHistory },
+  { match: (i) => i === "/account", handle: cmdAccount },
+  { match: (i) => matchesCommand(i, "/profile"), handle: cmdProfile },
+  { match: (i) => matchesCommand(i, "/model"), handle: cmdModel },
+  { match: (i) => i === "/retry", handle: cmdRetry }
+];
 
-    try {
-      const nextContext = switchAwsProfile(requestedProfile);
-      ctx.region = nextContext.region;
-      ctx.identityLabel = nextContext.identityLabel;
-      ctx.bedrockClient = createBedrockClient({ region: ctx.region });
-      ctx.messages = [];
-      clearSessionIfEnabled(ctx);
-      console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
-      if (ctx.identityLabel) {
-        console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${ctx.identityLabel}`);
-      }
-      console.log(`${ANSI.green}Region:${ANSI.reset} ${ctx.region}`);
-      console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
-      console.log(terminalLine());
-    } catch (err) {
-      console.error(`${ANSI.yellow}${err.message}${ANSI.reset}`);
-      console.log(terminalLine());
+async function handleCommand(input, ctx) {
+  for (const { match, handle } of COMMAND_DISPATCH) {
+    if (match(input)) {
+      return handle(input, ctx);
     }
-    return { signal: "handled" };
-  }
-
-  if (matchesCommand(input, "/model")) {
-    const requestedModel = commandArg(input, "/model");
-    let nextModel = null;
-    let nextEffort = ctx.effort;
-    if (requestedModel) {
-      nextModel = findModel(ctx.models, requestedModel);
-      if (!nextModel) {
-        console.error(`${ANSI.yellow}Modell nicht gefunden:${ANSI.reset} ${requestedModel}`);
-        console.error(`${ANSI.gray}Verfuegbar: ${ctx.models.map((m) => m.label).join(", ")}${ANSI.reset}`);
-        console.log(terminalLine());
-        return { signal: "handled" };
-      }
-      // Effort-Wunsch beibehalten, falls das neue Modell ihn unterstuetzt.
-      // ctx.preferredEffort bleibt auch ueber Modelle ohne Effort hinweg
-      // erhalten (sticky), damit die Wahl beim Zurueckwechseln nicht verloren geht.
-      nextEffort = resolveEffortLevel(nextModel, ctx.preferredEffort);
-    } else {
-      const selection = await promptForModelSelection(ctx.models, ctx.modelId, ctx.preferredEffort);
-      if (selection) {
-        nextModel = selection.model;
-        nextEffort = selection.effort;
-      }
-    }
-    if (nextModel) {
-      ctx.modelId = nextModel.id;
-      ctx.currentModel = nextModel;
-      ctx.effort = nextEffort;
-      ctx.inferenceConfig = buildInferenceConfig(ctx.currentModel, ctx.activeInferenceOverrides);
-      tryPersist(() => writeLastModelId(ctx.modelId), "Modell speichern", ctx.debugMode);
-      // Nur speichern, wenn das Modell Effort unterstuetzt. writeSavedEffort(null)
-      // wuerde die gespeicherte Praeferenz loeschen, obwohl der Nutzer sie beim
-      // naechsten Effort-Modell wieder erwartet.
-      if (nextEffort) {
-        ctx.preferredEffort = nextEffort;
-        tryPersist(() => writeSavedEffort(nextEffort), "Effort speichern", ctx.debugMode);
-      }
-      const effortLabel = formatEffortLabel(ctx.effort);
-      const effortSuffix = effortLabel ? ` ${ANSI.gray}(Effort: ${effortLabel})${ANSI.reset}` : "";
-      console.log(`${ANSI.green}Modell:${ANSI.reset} ${ctx.currentModel.label || ctx.modelId}${effortSuffix}`);
-      console.log(terminalLine());
-    }
-    return { signal: "handled" };
-  }
-
-  if (input === "/retry") {
-    if (!ctx.lastPrompt) {
-      console.error(`${ANSI.yellow}Kein vorheriger Prompt zum Wiederholen.${ANSI.reset}`);
-      console.log(terminalLine());
-      return { signal: "handled" };
-    }
-    ctx.messages = stripRetryPair(ctx.messages, ctx.lastPrompt);
-    console.log(`${ANSI.gray}Wiederhole: ${ctx.lastPrompt}${ANSI.reset}`);
-    return { signal: "run", promptText: ctx.lastPrompt };
   }
 
   if (input.startsWith("/")) {

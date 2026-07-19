@@ -114,6 +114,14 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function tryPersistWeb(action, label) {
+  try {
+    action();
+  } catch (err) {
+    console.error(`[Web] Warnung: ${label} fehlgeschlagen: ${err.message}`);
+  }
+}
+
 const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
 // Schutz gegen DNS-Rebinding und CSRF von anderen lokalen Ursprüngen:
@@ -201,7 +209,10 @@ export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
 function toPublicMessages(messages) {
   return messages.map((message) => ({
     role: message.role,
-    text: message.content?.find((block) => typeof block.text === "string")?.text ?? "",
+    text: (message.content ?? [])
+      .filter((block) => typeof block.text === "string")
+      .map((block) => block.text)
+      .join(""),
     attachments: message.attachmentNames ?? (message.content ?? [])
       .filter((block) => block.document || block.image)
       .map((block) => block.document?.name || "Bild")
@@ -392,9 +403,7 @@ export function createWebServer(options = {}) {
     state.inferenceConfig = buildInferenceConfig(selected, inferenceOverrides);
     state.effort = resolveEffortLevel(selected, state.preferredEffort);
     if (persistModelSelection) {
-      try {
-        writeLastModelId(selected.id);
-      } catch {}
+      tryPersistWeb(() => writeLastModelId(selected.id), "Modell speichern");
     }
     sendJson(res, 200, getStatePayload());
   }
@@ -419,9 +428,7 @@ export function createWebServer(options = {}) {
     state.effort = requested;
     state.preferredEffort = requested;
     if (persistEffortSelection) {
-      try {
-        writeSavedEffort(requested);
-      } catch {}
+      tryPersistWeb(() => writeSavedEffort(requested), "Effort speichern");
     }
     sendJson(res, 200, getStatePayload());
   }

@@ -312,6 +312,7 @@ export async function readPrompt({ history = [] } = {}) {
       if (done) return;
       done = true;
       process.stdin.off("keypress", onKeypress);
+      process.stdin.off("error", onStdinError);
       process.stdout.write(BRACKETED_PASTE_OFF);
       process.stdout.write("\r\u001b[0J");
       if (value !== null) {
@@ -322,6 +323,10 @@ export async function readPrompt({ history = [] } = {}) {
       }
       process.stdin.pause();
       resolve(value);
+    }
+
+    function onStdinError() {
+      cleanup(null);
     }
 
     function applyCompletion() {
@@ -486,6 +491,7 @@ export async function readPrompt({ history = [] } = {}) {
     }
 
     process.stdin.on("keypress", onKeypress);
+    process.stdin.on("error", onStdinError);
     render();
   });
 }

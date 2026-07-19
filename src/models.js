@@ -12,11 +12,9 @@ export function getUserModelsPath() {
 
 export function resolveModelsPath(defaultPath) {
   const userPath = getUserModelsPath();
-  try {
-    if (fs.existsSync(userPath)) {
-      return userPath;
-    }
-  } catch {}
+  if (fs.existsSync(userPath)) {
+    return userPath;
+  }
   return defaultPath;
 }
 
