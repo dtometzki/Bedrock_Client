@@ -20,9 +20,14 @@ export const SLASH_COMMANDS = [
   { name: "/exit", description: "Beenden" }
 ];
 
+// SLASH_COMMANDS ist statisch; die abgeleitete Liste wird daher einmal
+// memoiziert statt bei jedem Tastendruck im Prompt neu aufgebaut.
+let cachedSlashCommandCompletions = null;
+
 export function getSlashCommandCompletions() {
-  return [...new Set(SLASH_COMMANDS.map((command) => command.completion || command.name))]
+  cachedSlashCommandCompletions ??= [...new Set(SLASH_COMMANDS.map((command) => command.completion || command.name))]
     .filter((name) => name !== "/");
+  return cachedSlashCommandCompletions;
 }
 
 export function completeSlashCommand(line) {

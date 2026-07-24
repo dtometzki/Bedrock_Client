@@ -1,19 +1,19 @@
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import {
   buildAdaptiveThinkingFields,
   buildInferenceConfig,
   formatBedrockErrorMessage,
-  isAbortError,
   streamConverseWithRetry
 } from "./bedrock.js";
+import { consumeConverseStream } from "./stream-consumer.js";
 import { findModel, getModelInvocationId, normalizeEffort, resolveEffortLevel } from "./models.js";
 import { appendAssistantResponse, countHistoryTurns } from "./history.js";
 import { clearSession, writeSession } from "./session.js";
 import { writeLastModelId, writeSavedEffort } from "./config.js";
-import { addUsageRecord, emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
+import { emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
 
 export const DEFAULT_WEB_PORT = 3456;
 
@@ -159,17 +159,13 @@ function getRequestToken(req, url) {
   return url.searchParams.get("token") || "";
 }
 
-// Konstantzeit-Vergleich, damit die Antwortzeit das Token nicht Zeichen fuer
-// Zeichen preisgibt.
+// Konstantzeit-Vergleich ueber die gepruefte Node-Implementierung (C-seitig,
+// keine JIT-/Compiler-Effekte), damit die Antwortzeit das Token nicht Zeichen
+// fuer Zeichen preisgibt.
 export function timingSafeEqualStrings(a, b) {
   const bufferA = Buffer.from(String(a), "utf8");
   const bufferB = Buffer.from(String(b), "utf8");
-  if (bufferA.length !== bufferB.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < bufferA.length; i++) {
-    mismatch |= bufferA[i] ^ bufferB[i];
-  }
-  return mismatch === 0;
+  return bufferA.length === bufferB.length && timingSafeEqual(bufferA, bufferB);
 }
 
 export function isTokenValid(req, url, authToken) {
@@ -511,15 +507,10 @@ export function createWebServer(options = {}) {
       };
       const requestMessages = [...state.messages, userMessage];
 
-      let fullResponse = "";
-      let usageRecord = null;
-      let aborted = false;
-      let failed = false;
-
       const effortConfig = normalizeEffort(state.model);
 
-      try {
-        for await (const event of streamFn(client, {
+      const { fullResponse, usageRecord, aborted, error } = await consumeConverseStream(
+        streamFn(client, {
           modelId: getModelInvocationId(state.model),
           messages: toBedrockMessages(requestMessages),
           system: state.systemPrompt || undefined,
@@ -528,8 +519,12 @@ export function createWebServer(options = {}) {
             ? buildAdaptiveThinkingFields(state.effort, effortConfig.style)
             : undefined,
           abortSignal: abortController.signal
-        })) {
-          if (event.type === "retry") {
+        }),
+        {
+          usageTotals: state.usageTotals,
+          model: state.model,
+          abortSignal: abortController.signal,
+          onRetry: (event) => {
             send({
               type: "retry",
               attempt: event.attempt,
@@ -537,30 +532,18 @@ export function createWebServer(options = {}) {
               delayMs: Math.round(event.delayMs),
               message: formatBedrockErrorMessage(event.error)
             });
-            continue;
+          },
+          onReasoning: (text) => {
+            send({ type: "reasoning", text });
+          },
+          onText: (text) => {
+            send({ type: "text", text });
           }
-          if (event.type === "usage") {
-            usageRecord = addUsageRecord(state.usageTotals, {
-              model: state.model,
-              usage: event.usage,
-              metrics: event.metrics
-            });
-            continue;
-          }
-          if (event.type === "reasoning") {
-            send({ type: "reasoning", text: event.text });
-            continue;
-          }
-          fullResponse += event.text;
-          send({ type: "text", text: event.text });
         }
-      } catch (err) {
-        if (isAbortError(err) || abortController.signal.aborted) {
-          aborted = true;
-        } else {
-          failed = true;
-          send({ type: "error", message: formatBedrockErrorMessage(err) });
-        }
+      );
+      const failed = Boolean(error);
+      if (failed) {
+        send({ type: "error", message: formatBedrockErrorMessage(error) });
       }
 
       if (!failed && fullResponse) {

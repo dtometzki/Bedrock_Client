@@ -22,7 +22,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Resends the last prompt with `/retry` and exports the chat history as Markdown with `/export [file]`
 - Lets you set the system prompt at startup (`--system`, `--system-file`) and change it live with `/system`
 - Lets you interrupt a running response with `Esc` without leaving the chat
-- Retries throttled or transient Bedrock errors automatically with exponential backoff
+- Retries throttled or transient Bedrock errors (including request timeouts) automatically with exponential backoff
 - Supports inline line editing (arrow keys, Home/End, Delete) and an input history via `Up`/`Down`
 - Checks AWS CLI connectivity on startup with `aws sts get-caller-identity`
 - Calls Bedrock through the official AWS SDK for JavaScript using the default credential provider chain, so SSO and role sessions refresh automatically

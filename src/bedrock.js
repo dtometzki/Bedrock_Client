@@ -146,7 +146,10 @@ export function formatBedrockErrorDiagnostics(err, context = {}) {
 }
 
 export function isAbortError(err) {
-  return err?.name === "AbortError" || err?.name === "TimeoutError" || err?.aborted === true;
+  // Nur echte Nutzer-Abbrueche (Esc/Ctrl+C). SDK-seitige Timeouts ("TimeoutError")
+  // gehoeren nicht dazu: Sie sind transient und werden ueber die Retry-Logik
+  // wiederholt, statt als "Antwort abgebrochen" zu erscheinen.
+  return err?.name === "AbortError" || err?.aborted === true;
 }
 
 const RETRYABLE_ERROR_NAMES = new Set([
@@ -156,7 +159,8 @@ const RETRYABLE_ERROR_NAMES = new Set([
   "InternalServerException",
   "ModelTimeoutException",
   "RequestTimeout",
-  "RequestTimeoutException"
+  "RequestTimeoutException",
+  "TimeoutError"
 ]);
 
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);

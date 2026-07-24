@@ -34,14 +34,14 @@ import {
   createBedrockClient,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
-  isAbortError,
   streamConverseWithRetry
 } from "./bedrock.js";
+import { consumeConverseStream } from "./stream-consumer.js";
 import { createStreamInterruptController, promptForModelSelection, readPrompt } from "./prompt.js";
 import { exportHistoryToMarkdown } from "./export.js";
 import { DEFAULT_WEB_PORT, openInBrowser, startWebServer } from "./web-server.js";
 import { formatLine, resetResponseFormatting, sanitizeTerminalText } from "./response-format.js";
-import { addUsageRecord, emptyUsageTotals, printUsageSummary } from "./usage.js";
+import { emptyUsageTotals, printUsageSummary } from "./usage.js";
 
 function printHistorySummary(messages, maxTurns) {
   console.log(`${ANSI.green}Verlauf:${ANSI.reset} ${countHistoryTurns(messages)} Turns, ${messages.length} Nachrichten`);
@@ -407,11 +407,7 @@ async function streamModelResponse(ctx, promptText) {
     : undefined;
   const interrupter = createStreamInterruptController();
 
-  let fullResponse = "";
   let lineBuffer = "";
-  let usageRecord = null;
-  let aborted = false;
-  let requestError = null;
   let reasoningOpen = false;
 
   const flushLineBuffer = () => {
@@ -424,86 +420,74 @@ async function streamModelResponse(ctx, promptText) {
     }
   };
 
-  try {
-    if (ctx.debugMode) {
-      printDebugLines("Debug Request", formatDebugRequestLines({
-        model: ctx.currentModel,
-        modelId: bedrockModelId,
-        region: ctx.region,
-        profile: process.env.AWS_PROFILE || "default",
-        inferenceConfig: ctx.inferenceConfig,
-        effort: ctx.effort,
-        additionalModelRequestFields,
-        historyMessages: ctx.messages,
-        requestMessages,
-        system: ctx.systemPrompt,
-        maxTurns: ctx.maxTurns
-      }));
-    }
+  if (ctx.debugMode) {
+    printDebugLines("Debug Request", formatDebugRequestLines({
+      model: ctx.currentModel,
+      modelId: bedrockModelId,
+      region: ctx.region,
+      profile: process.env.AWS_PROFILE || "default",
+      inferenceConfig: ctx.inferenceConfig,
+      effort: ctx.effort,
+      additionalModelRequestFields,
+      historyMessages: ctx.messages,
+      requestMessages,
+      system: ctx.systemPrompt,
+      maxTurns: ctx.maxTurns
+    }));
+  }
 
-    resetResponseFormatting();
+  resetResponseFormatting();
 
-    for await (const event of streamConverseWithRetry(ctx.bedrockClient, {
+  const { fullResponse, usageRecord, aborted, error: requestError } = await consumeConverseStream(
+    streamConverseWithRetry(ctx.bedrockClient, {
       modelId: bedrockModelId,
       messages: requestMessages,
       system: ctx.systemPrompt,
       inferenceConfig: ctx.inferenceConfig,
       additionalModelRequestFields,
       abortSignal: interrupter.signal
-    })) {
-      if (event.type === "retry") {
+    }),
+    {
+      usageTotals: ctx.usageTotals,
+      model: ctx.currentModel,
+      abortSignal: interrupter.signal,
+      onRetry: (event) => {
         console.error(`${ANSI.gray}Erneuter Versuch ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)} ms (${formatBedrockErrorMessage(event.error)})${ANSI.reset}`);
-        continue;
-      }
-      if (event.type === "usage") {
-        usageRecord = addUsageRecord(ctx.usageTotals, {
-          model: ctx.currentModel,
-          usage: event.usage,
-          metrics: event.metrics
-        });
-        continue;
-      }
-      if (event.type === "reasoning") {
+      },
+      onReasoning: (text) => {
         if (!reasoningOpen) {
           process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
           reasoningOpen = true;
         }
-        process.stdout.write(sanitizeTerminalText(event.text));
-        continue;
-      }
-      if (reasoningOpen) {
-        process.stdout.write(`${ANSI.reset}\n\n`);
-        reasoningOpen = false;
-      }
-
-      const text = sanitizeTerminalText(event.text);
-      fullResponse += text;
-      lineBuffer += text;
-
-      if (lineBuffer.includes("\n")) {
-        const lines = lineBuffer.split("\n");
-        for (let i = 0; i < lines.length - 1; i++) {
-          const formatted = formatLine(lines[i]);
-          if (formatted !== null) {
-            console.log(formatted);
-          }
+        process.stdout.write(sanitizeTerminalText(text));
+      },
+      onText: (text) => {
+        if (reasoningOpen) {
+          process.stdout.write(`${ANSI.reset}\n\n`);
+          reasoningOpen = false;
         }
-        lineBuffer = lines[lines.length - 1];
+        lineBuffer += sanitizeTerminalText(text);
+
+        if (lineBuffer.includes("\n")) {
+          const lines = lineBuffer.split("\n");
+          for (let i = 0; i < lines.length - 1; i++) {
+            const formatted = formatLine(lines[i]);
+            if (formatted !== null) {
+              console.log(formatted);
+            }
+          }
+          lineBuffer = lines[lines.length - 1];
+        }
       }
     }
-  } catch (err) {
-    if (isAbortError(err) || interrupter.signal.aborted) {
-      aborted = true;
-    } else {
-      requestError = err;
-    }
-  } finally {
-    if (reasoningOpen) {
-      process.stdout.write(`${ANSI.reset}\n`);
-      reasoningOpen = false;
-    }
-    interrupter.dispose();
+  );
+
+  // Offenen Reasoning-Block auch bei Fehler/Abbruch sauber schliessen.
+  if (reasoningOpen) {
+    process.stdout.write(`${ANSI.reset}\n`);
+    reasoningOpen = false;
   }
+  interrupter.dispose();
 
   // Bereits gepufferte Teil-Zeile in jedem Fall ausgeben (auch bei Fehler/Abbruch).
   flushLineBuffer();
@@ -528,8 +512,10 @@ async function streamModelResponse(ctx, promptText) {
       console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
     }
 
-    if (fullResponse) {
-      ctx.messages = appendAssistantResponse(requestMessages, fullResponse, {
+    // Der Verlauf speichert den sanitizierten Text (keine Terminal-Steuersequenzen).
+    const responseText = sanitizeTerminalText(fullResponse);
+    if (responseText) {
+      ctx.messages = appendAssistantResponse(requestMessages, responseText, {
         aborted,
         maxTurns: ctx.maxTurns
       });

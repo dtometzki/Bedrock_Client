@@ -110,6 +110,7 @@ test("streamConverse forwards additionalModelRequestFields when present", async 
 
 test("isRetryableError recognizes throttling, status codes and retryable flags", () => {
   assert.equal(isRetryableError({ name: "ThrottlingException" }), true);
+  assert.equal(isRetryableError({ name: "TimeoutError" }), true);
   assert.equal(isRetryableError({ $retryable: {} }), true);
   assert.equal(isRetryableError({ $metadata: { httpStatusCode: 503 } }), true);
   assert.equal(isRetryableError({ originalStatusCode: 500 }), true);
@@ -118,9 +119,9 @@ test("isRetryableError recognizes throttling, status codes and retryable flags",
   assert.equal(isRetryableError(null), false);
 });
 
-test("isAbortError detects abort and timeout errors", () => {
+test("isAbortError detects only user-triggered aborts, not SDK timeouts", () => {
   assert.equal(isAbortError({ name: "AbortError" }), true);
-  assert.equal(isAbortError({ name: "TimeoutError" }), true);
+  assert.equal(isAbortError({ name: "TimeoutError" }), false);
   assert.equal(isAbortError({ aborted: true }), true);
   assert.equal(isAbortError({ name: "ThrottlingException" }), false);
 });

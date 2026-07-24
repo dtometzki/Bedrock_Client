@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.1 - 2026-07-24
+
+- Retry SDK request timeouts (`TimeoutError`) with exponential backoff instead of misclassifying them as a user abort — they no longer surface as "Antwort abgebrochen" without an error message.
+- Extract the shared Converse stream consumption into `src/stream-consumer.js` (`consumeConverseStream`), used by both the CLI and the web server: event classification, abort-vs-error distinction and usage accounting now live in one place and can no longer drift apart.
+- Compare the web auth token with Node's vetted `crypto.timingSafeEqual` instead of a hand-rolled constant-time loop.
+- Memoize slash-command completions instead of rebuilding them on every prompt keystroke.
+- Remove the unused `lib/interactiveSelect.js` (dead code that was never imported nor shipped in the package).
+- Add `test/stream-consumer.test.js` and update the abort/retry classification tests.
+
 ## 1.12.0 - 2026-07-14
 
 - Support a user-level `models.json` in the config directory (`~/.config/bedrock-chat/models.json` or `$BEDROCK_CHAT_CONFIG_DIR/models.json`) that overrides the bundled file, so account-specific entries like `profileArn` stay out of the package.
