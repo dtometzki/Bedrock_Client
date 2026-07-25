@@ -19,6 +19,27 @@ export function getSettingsPath() {
   return path.join(getConfigDir(), "settings.json");
 }
 
+// Schreibt eine Datei atomar: erst in eine temporaere Datei im selben
+// Verzeichnis, dann per rename ersetzen. Ohne das hinterlaesst ein Absturz
+// oder eine volle Platte mitten im Schreiben eine abgeschnittene Datei –
+// beim naechsten Lesen faellt das nur als "kein Inhalt" auf, der bisherige
+// Stand ist dann still verloren.
+export function writeFileAtomic(filePath, contents) {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+
+  try {
+    fs.writeFileSync(tmpPath, contents, "utf8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // Aufraeumen ist best effort; relevant ist der urspruengliche Fehler.
+    }
+    throw err;
+  }
+}
+
 export function readLastModelId(legacyPath = null) {
   const paths = [getLastModelPath(), legacyPath].filter(Boolean);
 
@@ -35,7 +56,7 @@ export function readLastModelId(legacyPath = null) {
 
 export function writeLastModelId(modelId) {
   fs.mkdirSync(getConfigDir(), { recursive: true });
-  fs.writeFileSync(getLastModelPath(), modelId, "utf8");
+  writeFileAtomic(getLastModelPath(), modelId);
 }
 
 function readSettings() {
@@ -53,7 +74,7 @@ function readSettings() {
 
 function writeSettings(settings) {
   fs.mkdirSync(getConfigDir(), { recursive: true });
-  fs.writeFileSync(getSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  writeFileAtomic(getSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`);
 }
 
 export function normalizeInferenceOverrides(value) {

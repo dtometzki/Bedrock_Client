@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getConfigDir } from "./config.js";
+import { getConfigDir, writeFileAtomic } from "./config.js";
 
 const SESSION_VERSION = 1;
 
@@ -44,7 +44,10 @@ export function writeSession(messages, { modelId = null } = {}) {
       modelId,
       messages: valid
     };
-    fs.writeFileSync(getSessionPath(), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    // Atomar schreiben: die Session-Datei wird nach jedem Turn komplett neu
+    // geschrieben – ein Abbruch mittendrin wuerde sonst den gesamten Verlauf
+    // unbrauchbar machen (readSession faengt den JSON-Fehler still ab).
+    writeFileAtomic(getSessionPath(), `${JSON.stringify(payload, null, 2)}\n`);
     return true;
   } catch {
     return false;

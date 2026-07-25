@@ -1,4 +1,18 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+
+// Alle nicht-interaktiven aws-CLI-Aufrufe laufen synchron und blockieren damit
+// den Start. Ohne Timeout haengt bedrock-chat unbegrenzt, wenn der SSO-Flow
+// oder ein Proxy nicht antwortet. Das interaktive `aws login` ist bewusst
+// ausgenommen – dort wartet die CLI legitim auf den Nutzer im Browser.
+const AWS_CLI_TIMEOUT_MS = 15_000;
+
+function runAwsCli(args) {
+  return execFileSync("aws", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: AWS_CLI_TIMEOUT_MS
+  });
+}
 
 export function getActiveAwsProfile() {
   return process.env.AWS_PROFILE || "default";
@@ -21,10 +35,7 @@ export function getAwsConfigValue(key, profile = null) {
     if (profile) {
       args.push("--profile", profile);
     }
-    return execFileSync("aws", args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"]
-    }).trim();
+    return runAwsCli(args).trim();
   } catch {
     return "";
   }
@@ -86,10 +97,7 @@ export function resolveAwsRegion() {
 }
 
 function fetchAwsIdentity() {
-  const identityJson = execSync("aws sts get-caller-identity --output json", {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+  const identityJson = runAwsCli(["sts", "get-caller-identity", "--output", "json"]);
   return formatAwsIdentity(JSON.parse(identityJson));
 }
 
@@ -130,10 +138,7 @@ export function loadAwsContext() {
 
 export function listAwsProfiles() {
   try {
-    return execSync("aws configure list-profiles", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"]
-    })
+    return runAwsCli(["configure", "list-profiles"])
       .split("\n")
       .map((profile) => profile.trim())
       .filter(Boolean);

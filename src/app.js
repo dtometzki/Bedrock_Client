@@ -263,6 +263,9 @@ async function cmdProfile(input, ctx) {
     const nextContext = switchAwsProfile(requestedProfile);
     ctx.region = nextContext.region;
     ctx.identityLabel = nextContext.identityLabel;
+    // Alten Client schliessen, sonst bleiben dessen offene Sockets bei jedem
+    // Profilwechsel liegen.
+    ctx.bedrockClient?.destroy?.();
     ctx.bedrockClient = createBedrockClient({ region: ctx.region });
     ctx.messages = [];
     clearSessionIfEnabled(ctx);

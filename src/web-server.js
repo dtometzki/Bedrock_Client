@@ -242,6 +242,55 @@ function toPersistableMessages(messages) {
     .filter((message) => message.content.length);
 }
 
+// Anzahl der juengsten Nutzer-Turns, fuer die Anhaenge als Binaerdaten im
+// Verlauf bleiben. 1 = der zuletzt gesendete Anhang steht genau einer
+// Folgefrage noch vollstaendig zur Verfuegung.
+export const ATTACHMENT_HISTORY_TURNS = 1;
+
+// Ersetzt Bild-/Dokument-Bloecke einer Nachricht durch einen Textplatzhalter
+// mit den Dateinamen. attachmentNames bleibt erhalten, damit die GUI den
+// Anhang weiterhin anzeigt.
+function stripAttachmentBytes(message) {
+  const blocks = message.content ?? [];
+  const binaryBlocks = blocks.filter((block) => block.document || block.image);
+  if (!binaryBlocks.length) {
+    return message;
+  }
+
+  const names = message.attachmentNames?.length
+    ? message.attachmentNames
+    : binaryBlocks.map((block) => block.document?.name || "Bild");
+  const placeholder = { text: `[Anhang${names.length === 1 ? "" : "e"}: ${names.join(", ")}]` };
+  const textBlocks = blocks.filter((block) => typeof block.text === "string");
+
+  return {
+    ...message,
+    content: [...textBlocks, placeholder]
+  };
+}
+
+// Begrenzt, wie lange Anhaenge als Binaerdaten im Verlauf mitgefuehrt werden.
+// Ohne diese Grenze schickt jede Folgefrage saemtliche frueheren Anhaenge
+// erneut an Bedrock – ein 4,5-MB-PDF wuerde bei zehn Rueckfragen zehnmal
+// hochgeladen und zehnmal als Input-Tokens abgerechnet.
+export function limitAttachmentHistory(messages, keepTurns = ATTACHMENT_HISTORY_TURNS) {
+  const userIndexes = [];
+  messages.forEach((message, index) => {
+    if (message.role === "user") {
+      userIndexes.push(index);
+    }
+  });
+
+  let keepFrom = messages.length;
+  if (keepTurns > 0) {
+    keepFrom = userIndexes.length > keepTurns ? userIndexes[userIndexes.length - keepTurns] : 0;
+  }
+
+  return messages.map((message, index) => (
+    index >= keepFrom ? message : stripAttachmentBytes(message)
+  ));
+}
+
 function toPublicUsageRecord(record) {
   if (!record) return null;
   return {
@@ -350,16 +399,21 @@ export function createWebServer(options = {}) {
     });
   }
 
+  // index.html ist statisch und aendert sich zur Laufzeit nicht; einmal lesen
+  // statt bei jedem Reload synchron von der Platte.
+  let cachedIndexHtml = null;
+
   function handleIndex(res) {
-    let html;
-    try {
-      html = fs.readFileSync(indexHtmlPath, "utf8");
-    } catch {
-      sendJson(res, 500, { error: "index.html nicht gefunden." });
-      return;
+    if (cachedIndexHtml === null) {
+      try {
+        cachedIndexHtml = fs.readFileSync(indexHtmlPath, "utf8");
+      } catch {
+        sendJson(res, 500, { error: "index.html nicht gefunden." });
+        return;
+      }
     }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(html);
+    res.end(cachedIndexHtml);
   }
 
   function handleAbort(res) {
@@ -547,7 +601,9 @@ export function createWebServer(options = {}) {
       }
 
       if (!failed && fullResponse) {
-        state.messages = appendAssistantResponse(requestMessages, fullResponse, { aborted, maxTurns });
+        state.messages = limitAttachmentHistory(
+          appendAssistantResponse(requestMessages, fullResponse, { aborted, maxTurns })
+        );
         persistSession();
       }
 

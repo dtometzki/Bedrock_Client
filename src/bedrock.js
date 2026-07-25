@@ -226,11 +226,7 @@ export async function* streamConverse(client, { modelId, messages, system, infer
   const response = await client.send(command, abortSignal ? { abortSignal } : {});
 
   for await (const event of response.stream ?? []) {
-    if (abortSignal?.aborted) {
-      const abortError = new Error("Anfrage abgebrochen.");
-      abortError.name = "AbortError";
-      throw abortError;
-    }
+    throwIfAborted(abortSignal);
 
     const streamException = getStreamException(event);
     if (streamException) {

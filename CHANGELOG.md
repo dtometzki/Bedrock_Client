@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.12.2 - 2026-07-25
+
+- Stop re-uploading web GUI attachments on every follow-up turn: binary image/document blocks are kept for the most recent user turn only (`limitAttachmentHistory`, `ATTACHMENT_HISTORY_TURNS`) and older ones are reduced to a `[Anhang: name]` text placeholder. Previously a 4.5 MB PDF was sent to Bedrock again — and billed as input tokens again — with every further question. Attachment names stay in the history, so the GUI still shows them.
+- Write `last-session.json`, `settings.json` and `last_model` atomically via a shared `writeFileAtomic` (temp file plus `rename`). A crash or a full disk mid-write previously left a truncated file; `readSession` swallowed the resulting JSON error and the whole conversation was silently gone on `--resume`.
+- Add a 15 s timeout to every non-interactive `aws` CLI call in `src/aws-context.js` and route them all through `execFileSync` instead of a mix with shell-based `execSync`. Without it a stalled SSO flow or proxy could hang startup indefinitely; the interactive `aws login` deliberately keeps no timeout.
+- Destroy the previous `BedrockRuntimeClient` on `/profile` switches instead of leaking its open sockets.
+- Cache the web GUI `index.html` after the first request instead of reading it from disk synchronously on every page load.
+- Reuse the existing `throwIfAborted` helper in `streamConverse` instead of constructing the abort error inline.
+- Add `test/attachment-history.test.js` covering attachment retention, untouched plain messages and `keepTurns: 0`.
+
 ## 1.12.1 - 2026-07-24
 
 - Retry SDK request timeouts (`TimeoutError`) with exponential backoff instead of misclassifying them as a user abort — they no longer surface as "Antwort abgebrochen" without an error message.
