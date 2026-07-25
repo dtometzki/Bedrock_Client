@@ -412,7 +412,11 @@ export function createWebServer(options = {}) {
         return;
       }
     }
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+      "X-Content-Type-Options": "nosniff"
+    });
     res.end(cachedIndexHtml);
   }
 
@@ -622,6 +626,18 @@ export function createWebServer(options = {}) {
     }
   }
 
+  const routes = new Map([
+    ["GET /", (_req, res) => handleIndex(res)],
+    ["GET /api/state", (_req, res) => sendJson(res, 200, getStatePayload())],
+    ["GET /api/usage", (_req, res) => handleUsage(res)],
+    ["POST /api/chat", handleChat],
+    ["POST /api/abort", (_req, res) => handleAbort(res)],
+    ["POST /api/clear", (_req, res) => handleClear(res)],
+    ["POST /api/model", handleModelSwitch],
+    ["POST /api/effort", handleEffort],
+    ["POST /api/system", handleSystemPrompt]
+  ]);
+
   const server = http.createServer((req, res) => {
     if (!isRequestAllowed(req)) {
       sendJson(res, 403, { error: "Zugriff nur von localhost erlaubt." });
@@ -642,24 +658,14 @@ export function createWebServer(options = {}) {
       return;
     }
 
-    const handler = {
-      "GET /": () => handleIndex(res),
-      "GET /api/state": () => sendJson(res, 200, getStatePayload()),
-      "GET /api/usage": () => handleUsage(res),
-      "POST /api/chat": () => handleChat(req, res),
-      "POST /api/abort": () => handleAbort(res),
-      "POST /api/clear": () => handleClear(res),
-      "POST /api/model": () => handleModelSwitch(req, res),
-      "POST /api/effort": () => handleEffort(req, res),
-      "POST /api/system": () => handleSystemPrompt(req, res)
-    }[route];
+    const handler = routes.get(route);
 
     if (!handler) {
       sendJson(res, 404, { error: `Unbekannte Route: ${route}` });
       return;
     }
 
-    Promise.resolve(handler()).catch((err) => {
+    Promise.resolve(handler(req, res)).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 500, { error: err.message });
       } else {
@@ -667,6 +673,10 @@ export function createWebServer(options = {}) {
       }
     });
   });
+
+  // Begrenzt, wie lange der Server auf den vollstaendigen Request-Body wartet.
+  // Ohne Timeout koennte ein langsamer Client die Verbindung unbegrenzt halten.
+  server.requestTimeout = 60_000;
 
   return { server, getState: getStatePayload };
 }

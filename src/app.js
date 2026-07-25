@@ -663,6 +663,11 @@ export async function main() {
       bedrockClient: createBedrockClient({ region: startupContext.region })
     };
 
+    process.on("SIGTERM", () => {
+      ctx.bedrockClient?.destroy?.();
+      process.exit(0);
+    });
+
     printStartupBanner({ model: ctx.currentModel, inferenceConfig: ctx.inferenceConfig, effort: ctx.effort });
     if (ctx.debugMode) {
       printDebugStatus(ctx.debugMode);

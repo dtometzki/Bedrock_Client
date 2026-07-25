@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.12.4 - 2026-07-25
+
+- Harden the stream interrupt controller: `dispose()` now wraps stdin cleanup in try/catch so a broken or closed stdin no longer crashes the process after a successful stream.
+- Destroy the Bedrock client on `SIGTERM` so process managers (systemd, Docker) shut down cleanly without leaking open sockets.
+- Add `Content-Security-Policy` and `X-Content-Type-Options` headers to the web GUI HTML response.
+- Set a 60 s `requestTimeout` on the web server so slow or stalled clients can no longer hold a connection open indefinitely.
+- Replace the per-request route dispatch object with a `Map` allocated once at server creation.
+- Remove the `existsSync` TOCTOU check in `readLastModelId`; a plain `readFileSync` with try/catch is sufficient.
+- Fix the import ordering in `src/usage.js` (all imports at the top).
+
 ## 1.12.3 - 2026-07-25
 
 - Fall back to the built-in price table when `pricingUsdPer1M` in `models.json` contains invalid values (e.g. `"3$"`): `getModelPricing` now validates with `Number.isFinite` instead of silently producing `NaN` cost estimates.

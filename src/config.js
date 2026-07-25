@@ -45,9 +45,7 @@ export function readLastModelId(legacyPath = null) {
 
   for (const modelPath of paths) {
     try {
-      if (fs.existsSync(modelPath)) {
-        return fs.readFileSync(modelPath, "utf8").trim();
-      }
+      return fs.readFileSync(modelPath, "utf8").trim();
     } catch {}
   }
 

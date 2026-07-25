@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { awsLoginCommand, getCommandErrorText, isExpiredAwsSession } from "./aws-context.js";
+import { ANSI, formatInteger, formatLatency, formatUsd, terminalLine } from "./ui.js";
 
 const execFileAsync = promisify(execFile);
-import { ANSI, formatInteger, formatLatency, formatUsd, terminalLine } from "./ui.js";
 
 // Eingebaute Fallback-Preise (USD pro 1 Mio. Tokens) fuer die Session-Kostenschaetzung.
 // Diese Tabelle veraltet, sobald AWS/Anthropic ihre Preise aendern. Bevorzugt wird

@@ -157,6 +157,7 @@ Notes:
 
 - The server binds to `127.0.0.1` only and keeps AWS credentials on the server side; the browser never sees them.
 - Requests are rejected unless their `Host` header is a localhost name (protection against DNS rebinding); a present `Origin` header must match the host (CSRF protection).
+- The HTML response carries a `Content-Security-Policy` and `X-Content-Type-Options: nosniff` header; a 60 s request timeout prevents stalled clients from holding connections open.
 - Markdown rendering loads `marked` and `DOMPurify` from a CDN; without internet access the GUI falls back to plain text.
 - One response streams at a time; a second parallel request is rejected until the first finishes or is aborted.
 

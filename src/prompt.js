@@ -520,10 +520,14 @@ export function createStreamInterruptController() {
     signal: controller.signal,
     dispose() {
       process.stdin.off("keypress", onKeypress);
-      if (!wasRaw) {
-        process.stdin.setRawMode(false);
+      try {
+        if (!wasRaw) {
+          process.stdin.setRawMode(false);
+        }
+        process.stdin.pause();
+      } catch {
+        // stdin nicht mehr verfügbar – kein Cleanup nötig.
       }
-      process.stdin.pause();
     }
   };
 }
