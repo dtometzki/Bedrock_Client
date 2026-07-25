@@ -23,10 +23,14 @@ const DEFAULT_MODEL_PRICING_USD_PER_1M = [
 
 export function getModelPricing(model) {
   const configuredPricing = model?.pricingUsdPer1M || model?.priceUsdPer1M;
-  if (configuredPricing?.input != null && configuredPricing?.output != null) {
+  const configuredInput = Number(configuredPricing?.input);
+  const configuredOutput = Number(configuredPricing?.output);
+  // Ungueltige Werte in models.json (z. B. "3$") wuerden sonst still zu
+  // NaN-Kosten; dann lieber auf die eingebaute Tabelle zurueckfallen.
+  if (Number.isFinite(configuredInput) && Number.isFinite(configuredOutput)) {
     return {
-      input: Number(configuredPricing.input),
-      output: Number(configuredPricing.output),
+      input: configuredInput,
+      output: configuredOutput,
       source: configuredPricing.source || "models.json"
     };
   }

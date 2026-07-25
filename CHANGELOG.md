@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.12.3 - 2026-07-25
+
+- Fall back to the built-in price table when `pricingUsdPer1M` in `models.json` contains invalid values (e.g. `"3$"`): `getModelPricing` now validates with `Number.isFinite` instead of silently producing `NaN` cost estimates.
+- Cap the CLI prompt history at 500 entries so very long sessions no longer grow it unboundedly.
+- Add `test/usage.test.js` covering configured prices, numeric strings, invalid values, the built-in fallback table and unknown models.
+
 ## 1.12.2 - 2026-07-25
 
 - Stop re-uploading web GUI attachments on every follow-up turn: binary image/document blocks are kept for the most recent user turn only (`limitAttachmentHistory`, `ATTACHMENT_HISTORY_TURNS`) and older ones are reduced to a `[Anhang: name]` text placeholder. Previously a 4.5 MB PDF was sent to Bedrock again — and billed as input tokens again — with every further question. Attachment names stay in the history, so the GUI still shows them.

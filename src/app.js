@@ -389,10 +389,17 @@ function printHelp(models) {
   models.forEach((m) => console.log(`  - ${m.label} (${m.id})`));
 }
 
+// Begrenzt die Eingabe-History, damit sie in sehr langen Sessions nicht
+// unbegrenzt im Speicher waechst.
+const MAX_PROMPT_HISTORY = 500;
+
 // Merkt sich den Prompt in der History, ohne aufeinanderfolgende Duplikate.
 function rememberPrompt(ctx, input) {
   if (ctx.promptHistory[ctx.promptHistory.length - 1] !== input) {
     ctx.promptHistory.push(input);
+    if (ctx.promptHistory.length > MAX_PROMPT_HISTORY) {
+      ctx.promptHistory.splice(0, ctx.promptHistory.length - MAX_PROMPT_HISTORY);
+    }
   }
 }
 
