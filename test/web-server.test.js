@@ -383,6 +383,47 @@ test("GET / liefert die Chat-Oberflaeche", async () => {
   });
 });
 
+test("GET / setzt eine strikte Content-Security-Policy ohne unsafe-inline-Skripte", async () => {
+  await withServer({}, async ({ url }) => {
+    const response = await fetch(`${url}/`);
+    const csp = response.headers.get("content-security-policy");
+    // script-src 'self' ohne 'unsafe-inline' blockiert injizierte
+    // Inline-Skripte selbst dann, wenn ein Sanitizer-Bypass Markup in eine
+    // gerenderte Antwort schmuggelt.
+    assert.match(csp, /script-src 'self'(;|$)/);
+    assert.ok(!/script-src[^;]*unsafe-inline/.test(csp));
+    // Kein pauschales https: in img-src – Remote-Bilder waeren ein
+    // Exfiltrationskanal fuer Prompt-Injection.
+    assert.match(csp, /img-src 'self' data:/);
+    assert.match(csp, /frame-ancestors 'none'/);
+    assert.equal(response.headers.get("x-frame-options"), "DENY");
+    // Die Seite darf keine CDN-Skripte mehr referenzieren; alles kommt lokal.
+    const html = await response.text();
+    assert.ok(!html.includes("cdnjs.cloudflare.com"));
+    assert.ok(!html.includes("http-equiv=\"Content-Security-Policy\""));
+  });
+});
+
+test("GET /app.js und /vendor-Skripte werden lokal ausgeliefert", async () => {
+  await withServer({}, async ({ url }) => {
+    for (const route of ["/app.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+      const response = await fetch(`${url}${route}`);
+      assert.equal(response.status, 200, `${route} sollte 200 liefern`);
+      assert.match(response.headers.get("content-type"), /text\/javascript/);
+    }
+    const purify = await fetch(`${url}/vendor/purify.min.js`).then((res) => res.text());
+    // DOMPurify muss eine Version mit dem Fix fuer CVE-2026-0540 sein
+    // (>= 3.3.2); die 3.1.x vom frueheren CDN-Stand war verwundbar.
+    const version = purify.match(/DOMPurify (\d+)\.(\d+)\.(\d+)/);
+    assert.ok(version, "Versions-Banner in purify.min.js erwartet");
+    const [major, minor, patch] = version.slice(1).map(Number);
+    assert.ok(
+      major > 3 || (major === 3 && (minor > 3 || (minor === 3 && patch >= 2))),
+      `DOMPurify ${major}.${minor}.${patch} ist aelter als 3.3.2`
+    );
+  });
+});
+
 test("Unbekannte Routen liefern 404", async () => {
   await withServer({}, async ({ url }) => {
     const response = await fetch(`${url}/api/unbekannt`);
@@ -679,11 +720,14 @@ test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => 
     const allowedQuery = await fetch(`${url}/api/state?token=${authToken}`);
     assert.equal(allowedQuery.status, 200);
 
-    // Die Index-Seite (statisches HTML ohne Geheimnisse) bleibt ohne Token
-    // erreichbar, damit ein Reload nach dem Entfernen des Tokens aus der URL
-    // funktioniert. Alle anderen Routen verlangen weiterhin das Token.
-    const indexWithoutToken = await fetch(`${url}/`);
-    assert.notEqual(indexWithoutToken.status, 403);
+    // Die statischen GUI-Dateien (HTML/JS ohne Geheimnisse) bleiben ohne Token
+    // erreichbar: die Index-Seite fuer den Reload nach dem Entfernen des Tokens
+    // aus der URL, die Skripte, weil <script src> keinen Token-Header mitsendet.
+    // Alle API-Routen verlangen weiterhin das Token.
+    for (const route of ["/", "/app.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+      const withoutToken = await fetch(`${url}${route}`);
+      assert.notEqual(withoutToken.status, 403, `${route} sollte ohne Token erreichbar sein`);
+    }
 
     const abortDenied = await fetch(`${url}/api/abort`, { method: "POST" });
     assert.equal(abortDenied.status, 403);

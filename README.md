@@ -157,8 +157,8 @@ Notes:
 
 - The server binds to `127.0.0.1` only and keeps AWS credentials on the server side; the browser never sees them.
 - Requests are rejected unless their `Host` header is a localhost name (protection against DNS rebinding); a present `Origin` header must match the host (CSRF protection).
-- The HTML response carries a `Content-Security-Policy` and `X-Content-Type-Options: nosniff` header; a 60 s request timeout prevents stalled clients from holding connections open.
-- Markdown rendering loads `marked` and `DOMPurify` from a CDN; without internet access the GUI falls back to plain text.
+- The HTML response carries a strict `Content-Security-Policy` (`script-src 'self'` — no inline scripts, no remote images), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer` headers; a 60 s request timeout prevents stalled clients from holding connections open.
+- Markdown rendering uses `marked` and `DOMPurify`, bundled with the package under `src/web/vendor/` and served by the local server itself — no CDN access at runtime, works offline. If a file is missing, the GUI falls back to plain text.
 - One response streams at a time; a second parallel request is rejected until the first finishes or is aborted.
 
 ## Add A Model

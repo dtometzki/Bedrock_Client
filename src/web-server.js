@@ -18,6 +18,43 @@ import { emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
 export const DEFAULT_WEB_PORT = 3456;
 
 const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
+
+// GUI-Skripte, die neben index.html ausgeliefert werden. Bewusst eine feste
+// Liste exakter Routen statt eines Dateisystem-Lookups aus dem Request-Pfad –
+// damit gibt es keinerlei Pfad-Traversal-Flaeche.
+const STATIC_SCRIPTS = new Map([
+  ["GET /app.js", new URL("./web/app.js", import.meta.url)],
+  ["GET /vendor/marked.min.js", new URL("./web/vendor/marked.min.js", import.meta.url)],
+  ["GET /vendor/purify.min.js", new URL("./web/vendor/purify.min.js", import.meta.url)]
+]);
+
+// Routen ohne Token-Pflicht: statisches HTML/JS ohne Geheimnisse. Die
+// Index-Seite muss ohne Token laden koennen (Browser-Reload, nachdem die GUI
+// das Token aus der URL entfernt und in sessionStorage uebernommen hat), und
+// die Script-Tags der Seite senden den Token-Header prinzipbedingt nicht mit.
+// Alle API-Routen, die Kosten verursachen oder Verlauf preisgeben, verlangen
+// weiterhin das Token.
+const PUBLIC_ROUTES = new Set(["GET /", ...STATIC_SCRIPTS.keys()]);
+
+// Einzige Quelle der Content-Security-Policy (index.html setzt bewusst kein
+// Meta-Tag mehr: zwei Policies werden beide durchgesetzt und blockieren sich
+// bei Abweichungen gegenseitig). script-src 'self' ohne 'unsafe-inline' ist
+// der zentrale XSS-Schutz der GUI: Selbst wenn ein Sanitizer-Bypass Markup in
+// eine Antwort schmuggelt, fuehrt der Browser injizierte Inline-Skripte und
+// Event-Handler nicht aus. img-src bleibt ohne https:, damit Modell-Antworten
+// keine Daten ueber Remote-Bild-URLs (Tracking-Pixel) exfiltrieren koennen.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "object-src 'none'",
+  "frame-ancestors 'none'"
+].join("; ");
+
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_CHAT_BODY_BYTES = 40_000_000;
 
@@ -405,25 +442,50 @@ export function createWebServer(options = {}) {
     });
   }
 
-  // index.html ist statisch und aendert sich zur Laufzeit nicht; einmal lesen
+  // Die statischen Dateien aendern sich zur Laufzeit nicht; einmal lesen
   // statt bei jedem Reload synchron von der Platte.
-  let cachedIndexHtml = null;
+  const staticFileCache = new Map();
+
+  function readStaticFile(cacheKey, filePath) {
+    let contents = staticFileCache.get(cacheKey);
+    if (contents === undefined) {
+      contents = fs.readFileSync(filePath, "utf8");
+      staticFileCache.set(cacheKey, contents);
+    }
+    return contents;
+  }
 
   function handleIndex(res) {
-    if (cachedIndexHtml === null) {
-      try {
-        cachedIndexHtml = fs.readFileSync(indexHtmlPath, "utf8");
-      } catch {
-        sendJson(res, 500, { error: "index.html nicht gefunden." });
-        return;
-      }
+    let html;
+    try {
+      html = readStaticFile("index", indexHtmlPath);
+    } catch {
+      sendJson(res, 500, { error: "index.html nicht gefunden." });
+      return;
     }
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+      "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer"
+    });
+    res.end(html);
+  }
+
+  function handleStaticScript(res, route) {
+    let script;
+    try {
+      script = readStaticFile(route, STATIC_SCRIPTS.get(route));
+    } catch {
+      sendJson(res, 500, { error: "GUI-Skript nicht gefunden." });
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/javascript; charset=utf-8",
       "X-Content-Type-Options": "nosniff"
     });
-    res.end(cachedIndexHtml);
+    res.end(script);
   }
 
   function handleAbort(res) {
@@ -634,6 +696,10 @@ export function createWebServer(options = {}) {
 
   const routes = new Map([
     ["GET /", (_req, res) => handleIndex(res)],
+    ...[...STATIC_SCRIPTS.keys()].map((route) => [
+      route,
+      (_req, res) => handleStaticScript(res, route)
+    ]),
     ["GET /api/state", (_req, res) => sendJson(res, 200, getStatePayload())],
     ["GET /api/usage", (_req, res) => handleUsage(res)],
     ["POST /api/chat", handleChat],
@@ -654,12 +720,9 @@ export function createWebServer(options = {}) {
     const { pathname } = url;
     const route = `${req.method} ${pathname}`;
 
-    // Die Index-Seite ist statisches HTML ohne Geheimnisse und bleibt ohne
-    // Token erreichbar (Host-/Origin-Pruefung oben gilt weiterhin). So
-    // funktioniert ein Browser-Reload, nachdem die GUI das Token aus der URL
-    // entfernt und in sessionStorage uebernommen hat. Alle API-Routen, die
-    // Kosten verursachen oder Verlauf preisgeben, verlangen das Token.
-    if (route !== "GET /" && !isTokenValid(req, url, authToken)) {
+    // Statische GUI-Dateien bleiben ohne Token erreichbar (siehe
+    // PUBLIC_ROUTES; Host-/Origin-Pruefung oben gilt weiterhin).
+    if (!PUBLIC_ROUTES.has(route) && !isTokenValid(req, url, authToken)) {
       sendJson(res, 403, { error: "Ungueltiges oder fehlendes Token." });
       return;
     }

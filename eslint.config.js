@@ -4,7 +4,9 @@
 // Stil- und Qualitätsregeln.
 export default [
   {
-    ignores: ["node_modules/**", "dist/**"]
+    // src/web/vendor enthaelt unveraenderte, minifizierte Fremdbibliotheken
+    // (marked, DOMPurify) – nicht unser Code, nicht linten.
+    ignores: ["node_modules/**", "dist/**", "src/web/vendor/**"]
   },
   {
     files: ["**/*.js"],

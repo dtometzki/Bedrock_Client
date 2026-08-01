@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getConfigDir, writeFileAtomic } from "./config.js";
+import { ensureConfigDir, getConfigDir, writeFileAtomic } from "./config.js";
 
 const SESSION_VERSION = 1;
 
@@ -37,7 +37,7 @@ export function readSession() {
 export function writeSession(messages, { modelId = null } = {}) {
   try {
     const valid = Array.isArray(messages) ? messages.filter(isValidMessage) : [];
-    fs.mkdirSync(getConfigDir(), { recursive: true });
+    ensureConfigDir();
     const payload = {
       version: SESSION_VERSION,
       savedAt: new Date().toISOString(),

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.12.6 - 2026-08-01
+
+Security release (findings from a code review of the web GUI and the dependency tree):
+
+- Remove the unused `@openai/codex-security` dependency (added with 1.12.5). It was never imported anywhere but pulled a ~300 MB tree — including a vendored Codex CLI binary — into every `npm install`, and required Node >= 22 while this package supports >= 20.
+- Bundle `marked` 12.0.2 and DOMPurify 3.4.12 under `src/web/vendor/` and serve them from the client's own server instead of cdnjs. The CDN pinned DOMPurify 3.1.6, which is affected by a known sanitizer bypass (CVE-2026-0540, fixed in 3.3.2). Independently, the CDN scripts never actually loaded: the CSP HTTP header and the meta CSP disagreed, and with two policies both are enforced — so the GUI silently always ran in the plain-text fallback and showed the "Formatierung eingeschraenkt" notice.
+- Move the GUI's inline script into `src/web/app.js` and make the HTTP header the single Content-Security-Policy (the meta tag is gone). `script-src 'self'` without `'unsafe-inline'` now blocks injected inline scripts and event handlers even if a future sanitizer bypass smuggles markup into a rendered answer; `img-src 'self' data:` keeps remote images out (a prompt-injection exfiltration channel); `frame-ancestors 'none'` plus `X-Frame-Options: DENY` prevent embedding, `Referrer-Policy: no-referrer` leaking URLs.
+- Write config and session files with mode `0600` and create the config directory with `0700`: `last-session.json` contains entire conversations and was world-readable before. Existing files are tightened on their next write (`rename` adopts the temp file's mode).
+- `npm audit fix` for the `brace-expansion` ReDoS advisory in the dev-only eslint dependency chain.
+- Extend `npm run check` to parse `src/web/app.js`, and add tests for the strict CSP header, the locally served `/app.js` and `/vendor/*` scripts (including a DOMPurify >= 3.3.2 version guard), token-free access being limited to static GUI files, and the private session file permissions.
+
 ## 1.12.5 - 2026-08-01
 
 - Extract the shared `tryPersist` helper into `src/config.js` and reuse it in both the CLI and the web server instead of keeping separate, near-identical copies.

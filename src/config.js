@@ -11,6 +11,13 @@ export function getConfigDir() {
   return path.join(baseDir, "bedrock-chat");
 }
 
+// Legt das Konfigurationsverzeichnis mit 0700 an: Verlauf und Einstellungen
+// gehen andere Nutzer desselben Rechners nichts an. Ein bereits vorhandenes
+// Verzeichnis behaelt seinen Modus (mkdir aendert existierende nicht).
+export function ensureConfigDir() {
+  fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
+}
+
 export function getLastModelPath() {
   return path.join(getConfigDir(), "last_model");
 }
@@ -28,7 +35,10 @@ export function writeFileAtomic(filePath, contents) {
   const tmpPath = `${filePath}.${process.pid}.tmp`;
 
   try {
-    fs.writeFileSync(tmpPath, contents, "utf8");
+    // mode 0600: Die Session-Datei enthaelt den kompletten Chat-Verlauf und
+    // geht andere Nutzer desselben Rechners nichts an. rename uebernimmt den
+    // Modus der Temp-Datei, zieht also auch bestehende Dateien auf 0600 nach.
+    fs.writeFileSync(tmpPath, contents, { encoding: "utf8", mode: 0o600 });
     fs.renameSync(tmpPath, filePath);
   } catch (err) {
     try {
@@ -53,7 +63,7 @@ export function readLastModelId(legacyPath = null) {
 }
 
 export function writeLastModelId(modelId) {
-  fs.mkdirSync(getConfigDir(), { recursive: true });
+  ensureConfigDir();
   writeFileAtomic(getLastModelPath(), modelId);
 }
 
@@ -71,7 +81,7 @@ function readSettings() {
 }
 
 function writeSettings(settings) {
-  fs.mkdirSync(getConfigDir(), { recursive: true });
+  ensureConfigDir();
   writeFileAtomic(getSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`);
 }
 

@@ -56,3 +56,19 @@ test("clearSession removes the stored session", () => {
     assert.deepEqual(readSession().messages, []);
   });
 });
+
+test("session file and created config dir are private (0600/0700)", { skip: process.platform === "win32" }, () => {
+  withTempConfigDir((configDir) => {
+    // Ein noch nicht existierendes Unterverzeichnis, damit der Verzeichnis-
+    // Modus von ensureConfigDir selbst stammt (mkdtemp oben liefert schon 700).
+    const nestedDir = path.join(configDir, "nested");
+    process.env.BEDROCK_CHAT_CONFIG_DIR = nestedDir;
+
+    writeSession([message("user", "geheim"), message("assistant", "ok")], { modelId: "m" });
+
+    // Der Verlauf enthaelt komplette Gespraeche und darf fuer andere Nutzer
+    // desselben Rechners weder lesbar noch das Verzeichnis betretbar sein.
+    assert.equal(fs.statSync(getSessionPath()).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(nestedDir).mode & 0o777, 0o700);
+  });
+});
