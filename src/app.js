@@ -14,6 +14,7 @@ import {
   readLastModelId,
   readSavedEffort,
   readSavedInferenceOverrides,
+  tryPersist,
   writeLastModelId,
   writeSavedEffort,
   writeSavedInferenceOverrides
@@ -121,18 +122,6 @@ function commandArg(input, name) {
 // True, wenn input exakt der Befehl ist oder mit "<name> " beginnt.
 function matchesCommand(input, name) {
   return input === name || input.startsWith(`${name} `);
-}
-
-// Fuehrt eine Schreiboperation aus und meldet Fehler nur im Debug-Modus,
-// statt sie still zu verschlucken.
-function tryPersist(action, label, debugMode) {
-  try {
-    action();
-  } catch (err) {
-    if (debugMode) {
-      console.error(`${ANSI.gray}Warnung: ${label} fehlgeschlagen: ${err.message}${ANSI.reset}`);
-    }
-  }
 }
 
 function clearSessionIfEnabled(ctx) {
@@ -394,11 +383,13 @@ function printHelp(models) {
 const MAX_PROMPT_HISTORY = 500;
 
 // Merkt sich den Prompt in der History, ohne aufeinanderfolgende Duplikate.
+// Das Array darf bis zum 1.5-fachen Limit wachsen, bevor es periodisch
+// getrimmt wird – so entfallen ~99% der splice-Allokationen.
 function rememberPrompt(ctx, input) {
   if (ctx.promptHistory[ctx.promptHistory.length - 1] !== input) {
     ctx.promptHistory.push(input);
-    if (ctx.promptHistory.length > MAX_PROMPT_HISTORY) {
-      ctx.promptHistory.splice(0, ctx.promptHistory.length - MAX_PROMPT_HISTORY);
+    if (ctx.promptHistory.length > MAX_PROMPT_HISTORY * 1.5) {
+      ctx.promptHistory = ctx.promptHistory.slice(-MAX_PROMPT_HISTORY);
     }
   }
 }

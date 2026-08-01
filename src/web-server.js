@@ -12,7 +12,7 @@ import { consumeConverseStream } from "./stream-consumer.js";
 import { findModel, getModelInvocationId, normalizeEffort, resolveEffortLevel } from "./models.js";
 import { appendAssistantResponse, countHistoryTurns } from "./history.js";
 import { clearSession, writeSession } from "./session.js";
-import { writeLastModelId, writeSavedEffort } from "./config.js";
+import { tryPersist, writeLastModelId, writeSavedEffort } from "./config.js";
 import { emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
 
 export const DEFAULT_WEB_PORT = 3456;
@@ -115,11 +115,7 @@ function sendJson(res, statusCode, payload) {
 }
 
 function tryPersistWeb(action, label) {
-  try {
-    action();
-  } catch (err) {
-    console.error(`[Web] Warnung: ${label} fehlgeschlagen: ${err.message}`);
-  }
+  tryPersist(action, `[Web] ${label}`, true);
 }
 
 const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -203,16 +199,26 @@ export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
 }
 
 function toPublicMessages(messages) {
-  return messages.map((message) => ({
-    role: message.role,
-    text: (message.content ?? [])
-      .filter((block) => typeof block.text === "string")
-      .map((block) => block.text)
-      .join(""),
-    attachments: message.attachmentNames ?? (message.content ?? [])
-      .filter((block) => block.document || block.image)
-      .map((block) => block.document?.name || "Bild")
-  }));
+  return messages.map((message) => {
+    const content = message.content ?? [];
+    const textParts = [];
+    const attachmentParts = [];
+
+    // Ein Durchlauf ueber content statt zweier separater filter/map-Ketten.
+    for (const block of content) {
+      if (typeof block.text === "string") {
+        textParts.push(block.text);
+      } else if (block.document || block.image) {
+        attachmentParts.push(block.document?.name || "Bild");
+      }
+    }
+
+    return {
+      role: message.role,
+      text: textParts.join(""),
+      attachments: message.attachmentNames ?? attachmentParts
+    };
+  });
 }
 
 function toBedrockMessages(messages) {

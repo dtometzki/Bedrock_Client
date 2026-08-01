@@ -14,7 +14,12 @@
     "label": "claude-sonnet-5",
     "disabledInferenceConfigFields": ["temperature"],
     "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
-    "profileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"
+    "profileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
+    "pricingUsdPer1M": {
+      "input": 3,
+      "output": 15,
+      "source": "Anthropic/Amazon Bedrock on-demand text token pricing"
+    }
   },
   {
     "id": "global.anthropic.claude-opus-4-6-v1",
@@ -42,6 +47,11 @@
     "label": "claude-fable-5",
     "disabledInferenceConfigFields": ["temperature"],
     "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
+    "pricingUsdPer1M": {
+      "input": 10,
+      "output": 50,
+      "source": "Anthropic/Amazon Bedrock on-demand text token pricing"
+    },
     "aliases": [
       "eu.anthropic.claude-fable-5",
       "global.anthropic.claude-fable-5",

@@ -122,3 +122,15 @@ export function writeSavedEffort(effort) {
   }
   writeSettings(settings);
 }
+
+// Fuehrt eine persistierende Aktion aus und meldet Fehler im Debug-Modus,
+// statt sie still zu verschlucken. Gemeinsam genutzt von CLI und Web-Server.
+export function tryPersist(action, label, debugMode = false) {
+  try {
+    action();
+  } catch (err) {
+    if (debugMode) {
+      console.error(`Warnung: ${label} fehlgeschlagen: ${err.message}`);
+    }
+  }
+}

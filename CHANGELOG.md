@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.5 - 2026-08-01
+
+- Extract the shared `tryPersist` helper into `src/config.js` and reuse it in both the CLI and the web server instead of keeping separate, near-identical copies.
+- Add `pricingUsdPer1M` entries for `claude-sonnet-5` ($3/$15) and `claude-fable-5` ($10/$50) in the bundled `models.json`, and extend the built-in fallback price table with those models plus Opus 5 so session cost estimates no longer show "n/a" for the latest generation.
+- Collapse the two separate `content` iterations in `toPublicMessages` into a single pass.
+- Trim the CLI prompt history only every 250 excess entries (`1.5 × MAX_PROMPT_HISTORY`) instead of on every push past the cap, cutting splice allocations by ~99%.
+
 ## 1.12.4 - 2026-07-25
 
 - Harden the stream interrupt controller: `dispose()` now wraps stdin cleanup in try/catch so a broken or closed stdin no longer crashes the process after a successful stream.
