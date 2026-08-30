@@ -29,12 +29,13 @@ import {
   switchAwsProfile
 } from "./aws-context.js";
 import {
+  accountMismatchFromError,
   buildAdaptiveThinkingFields,
   buildInferenceConfig,
   createBedrockClient,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
-  regionFromModelId,
+  regionForModelId,
   streamConverseWithRetry
 } from "./bedrock.js";
 import { consumeConverseStream } from "./stream-consumer.js";
@@ -445,7 +446,7 @@ async function streamModelResponse(ctx, promptText) {
   process.stdout.write("\n");
 
   const bedrockModelId = getModelInvocationId(ctx.currentModel);
-  const requestRegion = regionFromModelId(bedrockModelId) || ctx.region;
+  const requestRegion = regionForModelId(bedrockModelId, ctx.region);
   const bedrockClient = resolveBedrockClient(ctx, requestRegion);
   const effortConfig = normalizeEffort(ctx.currentModel);
   const additionalModelRequestFields = effortConfig
@@ -550,7 +551,10 @@ async function streamModelResponse(ctx, promptText) {
     } else {
       console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
     }
-    if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
+    const accountMismatch = accountMismatchFromError(requestError);
+    if (accountMismatch) {
+      console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Das Inference Profile gehoert zu AWS-Konto ${accountMismatch.resourceAccount}, deine Identität nutzt aber Konto ${accountMismatch.callerAccount}. Setze profileArn auf dein eigenes Konto oder nutze die reine Inference-Profile-ID (z. B. ${ctx.currentModel.id}).`);
+    } else if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
       console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
     }
   } else {

@@ -5,9 +5,11 @@ import {
   buildInferenceConfig,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
+  accountMismatchFromError,
   getRetryDelayMs,
   isAbortError,
   isRetryableError,
+  regionForModelId,
   regionFromModelId,
   streamConverse,
   streamConverseWithRetry
@@ -130,6 +132,47 @@ test("regionFromModelId liest die Region aus einem vollqualifizierten Bedrock-AR
   assert.equal(regionFromModelId(""), null);
   assert.equal(regionFromModelId(null), null);
   assert.equal(regionFromModelId(undefined), null);
+});
+
+test("regionForModelId leitet die Aufrufregion aus ARN, Geo-Prefix oder Umgebung ab", () => {
+  // Ein vollqualifizierter ARN gibt die Region fest vor.
+  assert.equal(
+    regionForModelId("arn:aws:bedrock:us-east-1:1:inference-profile/us.anthropic.claude-sonnet-5", "eu-central-1"),
+    "us-east-1"
+  );
+  // us.-Profil aus einer EU-Umgebung -> Standard-Quellregion der US-Geografie.
+  assert.equal(regionForModelId("us.anthropic.claude-sonnet-5", "eu-central-1"), "us-east-1");
+  // us.-Profil, wenn die Umgebung schon in der US-Geografie liegt -> Umgebung bleibt.
+  assert.equal(regionForModelId("us.anthropic.claude-sonnet-5", "us-west-2"), "us-west-2");
+  // eu.-Profil aus einer US-Umgebung -> Standard-Quellregion der EU-Geografie.
+  assert.equal(regionForModelId("eu.anthropic.claude-fable-5", "us-east-1"), "eu-central-1");
+  // apac.-Profil aus einer EU-Umgebung -> Standard-Quellregion der APAC-Geografie.
+  assert.equal(regionForModelId("apac.anthropic.claude-sonnet-5", "eu-central-1"), "ap-southeast-1");
+  // global. und bloße IDs nutzen die Umgebungsregion.
+  assert.equal(regionForModelId("global.anthropic.claude-sonnet-4-6", "eu-central-1"), "eu-central-1");
+  assert.equal(regionForModelId("anthropic.claude-3-7-sonnet", "eu-central-1"), "eu-central-1");
+  assert.equal(regionForModelId(null, "eu-central-1"), "eu-central-1");
+});
+
+test("accountMismatchFromError erkennt fremde Konten in AccessDenied-Meldungen", () => {
+  const mismatch = accountMismatchFromError({
+    message: "User: arn:aws:sts::111122223333:assumed-role/ExampleRole/session is not authorized to " +
+      "perform: bedrock:InvokeModelWithResponseStream on resource: " +
+      "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5 " +
+      "because no resource-based policy allows the bedrock:InvokeModelWithResponseStream action"
+  });
+  assert.deepEqual(mismatch, { callerAccount: "111122223333", resourceAccount: "123456789012" });
+
+  // Gleiche Konten -> kein Hinweis.
+  assert.equal(accountMismatchFromError({
+    message: "User: arn:aws:sts::111122223333:assumed-role/ExampleRole/session is not authorized to " +
+      "perform: bedrock:InvokeModelWithResponseStream on resource: " +
+      "arn:aws:bedrock:us-east-1:111122223333:inference-profile/us.anthropic.claude-sonnet-5"
+  }), null);
+
+  // Andere Fehler ohne beide Konten -> kein Hinweis.
+  assert.equal(accountMismatchFromError({ message: "ValidationException: The provided model identifier is invalid." }), null);
+  assert.equal(accountMismatchFromError(null), null);
 });
 
 test("isRetryableError recognizes throttling, status codes and retryable flags", () => {

@@ -240,6 +240,40 @@ test("POST /api/chat ruft ARN-Regionen mit einem passenden Client auf", async ()
   assert.deepEqual(usedClient, { tag: "regional:us-east-1" });
 });
 
+test("POST /api/chat ruft ein us.-Inference-Profil aus einer EU-Umgebung in einer US-Region auf", async () => {
+  const usModel = { id: "us.anthropic.claude-sonnet-5", label: "Sonnet 5" };
+  const createdRegions = [];
+  function createClient({ region }) {
+    createdRegions.push(region);
+    return { tag: `regional:${region}` };
+  }
+  let usedClient;
+  async function* fakeStream(client, params) {
+    usedClient = client;
+    void params;
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({
+    models: [usModel],
+    model: usModel,
+    client: { tag: "base" },
+    region: "eu-central-1",
+    createClient,
+    streamFn: fakeStream
+  }, async ({ url }) => {
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+  });
+
+  // Ein us.-Profil darf nicht gegen den eu-central-1-Endpoint laufen.
+  assert.deepEqual(createdRegions, ["us-east-1"]);
+  assert.deepEqual(usedClient, { tag: "regional:us-east-1" });
+});
+
 test("POST /api/chat nutzt den Basis-Client ohne abweichende ARN-Region", async () => {
   const plainModel = { id: "global.anthropic.claude-sonnet-4-6", label: "Sonnet 4.6" };
   const baseClient = { tag: "base" };

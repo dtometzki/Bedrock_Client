@@ -7,7 +7,7 @@ import {
   buildInferenceConfig,
   createBedrockClient,
   formatBedrockErrorMessage,
-  regionFromModelId,
+  regionForModelId,
   streamConverseWithRetry
 } from "./bedrock.js";
 import { consumeConverseStream } from "./stream-consumer.js";
@@ -338,14 +338,14 @@ export function createWebServer(options = {}) {
   // abweichende ARN-Regionen bekommen einen eigenen, zwischengespeicherten Client.
   const regionalClients = new Map();
   function resolveInvocationClient(modelId) {
-    const arnRegion = regionFromModelId(modelId);
-    if (!arnRegion || arnRegion === region) {
+    const targetRegion = regionForModelId(modelId, region);
+    if (!targetRegion || targetRegion === region) {
       return client;
     }
-    let regionalClient = regionalClients.get(arnRegion);
+    let regionalClient = regionalClients.get(targetRegion);
     if (!regionalClient) {
-      regionalClient = createClient({ region: arnRegion });
-      regionalClients.set(arnRegion, regionalClient);
+      regionalClient = createClient({ region: targetRegion });
+      regionalClients.set(targetRegion, regionalClient);
     }
     return regionalClient;
   }
