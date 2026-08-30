@@ -13,8 +13,7 @@
     "id": "us.anthropic.claude-sonnet-5",
     "label": "claude-sonnet-5",
     "disabledInferenceConfigFields": ["temperature"],
-    "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
-    "profileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"
+    "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" }
   },
   {
     "id": "global.anthropic.claude-opus-4-6-v1",
@@ -44,11 +43,8 @@
     "effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" },
     "aliases": [
       "eu.anthropic.claude-fable-5",
-      "global.anthropic.claude-fable-5",
-      "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-fable-5",
-      "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/global.anthropic.claude-fable-5"
-    ],
-    "profileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-fable-5"
+      "global.anthropic.claude-fable-5"
+    ]
   },
   {
     "id": "minimax.minimax-m2.5",

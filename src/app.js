@@ -29,11 +29,13 @@ import {
   switchAwsProfile
 } from "./aws-context.js";
 import {
+  accountMismatchFromError,
   buildAdaptiveThinkingFields,
   buildInferenceConfig,
   createBedrockClient,
   formatBedrockErrorDiagnostics,
   formatBedrockErrorMessage,
+  regionForModelId,
   streamConverseWithRetry
 } from "./bedrock.js";
 import { consumeConverseStream } from "./stream-consumer.js";
@@ -264,8 +266,11 @@ async function cmdProfile(input, ctx) {
     ctx.region = nextContext.region;
     ctx.identityLabel = nextContext.identityLabel;
     // Alten Client schliessen, sonst bleiben dessen offene Sockets bei jedem
-    // Profilwechsel liegen.
+    // Profilwechsel liegen. Auch die pro ARN-Region angelegten Clients werden
+    // verworfen, damit keine mit den alten Credentials erzeugten Clients
+    // weiterlaufen.
     ctx.bedrockClient?.destroy?.();
+    destroyRegionalBedrockClients(ctx);
     ctx.bedrockClient = createBedrockClient({ region: ctx.region });
     ctx.messages = [];
     clearSessionIfEnabled(ctx);
@@ -403,6 +408,36 @@ function rememberPrompt(ctx, input) {
   }
 }
 
+// Liefert den Bedrock-Client fuer die effektive Anfrageregion. Ein
+// Inference-Profile-ARN ist an die Region im ARN gebunden; ambient
+// (Profil/Env) konfigurierte Regionen wuerden sonst zu "The provided model
+// identifier is invalid." fuehren. Fuer die Umgebungsregion wird der bestehende
+// Client wiederverwendet, abweichende ARN-Regionen bekommen einen eigenen,
+// zwischengespeicherten Client.
+function resolveBedrockClient(ctx, region) {
+  if (!region || region === ctx.region) {
+    return ctx.bedrockClient;
+  }
+  ctx.regionalBedrockClients ??= new Map();
+  let client = ctx.regionalBedrockClients.get(region);
+  if (!client) {
+    client = createBedrockClient({ region });
+    ctx.regionalBedrockClients.set(region, client);
+  }
+  return client;
+}
+
+// Verwirft die zusaetzlich pro ARN-Region angelegten Clients. Wird beim
+// Profilwechsel gebraucht, damit keine mit alten Credentials erzeugten Clients
+// weiterverwendet werden, und beim Beenden zum Aufraeumen offener Sockets.
+function destroyRegionalBedrockClients(ctx) {
+  if (!ctx.regionalBedrockClients) return;
+  for (const client of ctx.regionalBedrockClients.values()) {
+    client?.destroy?.();
+  }
+  ctx.regionalBedrockClients.clear();
+}
+
 // Sendet einen Prompt an das Modell, streamt die Antwort und aktualisiert ctx.
 async function streamModelResponse(ctx, promptText) {
   ctx.lastPrompt = promptText;
@@ -411,6 +446,8 @@ async function streamModelResponse(ctx, promptText) {
   process.stdout.write("\n");
 
   const bedrockModelId = getModelInvocationId(ctx.currentModel);
+  const requestRegion = regionForModelId(bedrockModelId, ctx.region);
+  const bedrockClient = resolveBedrockClient(ctx, requestRegion);
   const effortConfig = normalizeEffort(ctx.currentModel);
   const additionalModelRequestFields = effortConfig
     ? buildAdaptiveThinkingFields(ctx.effort, effortConfig.style)
@@ -434,7 +471,7 @@ async function streamModelResponse(ctx, promptText) {
     printDebugLines("Debug Request", formatDebugRequestLines({
       model: ctx.currentModel,
       modelId: bedrockModelId,
-      region: ctx.region,
+      region: requestRegion,
       profile: process.env.AWS_PROFILE || "default",
       inferenceConfig: ctx.inferenceConfig,
       effort: ctx.effort,
@@ -449,7 +486,7 @@ async function streamModelResponse(ctx, promptText) {
   resetResponseFormatting();
 
   const { fullResponse, usageRecord, aborted, error: requestError } = await consumeConverseStream(
-    streamConverseWithRetry(ctx.bedrockClient, {
+    streamConverseWithRetry(bedrockClient, {
       modelId: bedrockModelId,
       messages: requestMessages,
       system: ctx.systemPrompt,
@@ -508,13 +545,16 @@ async function streamModelResponse(ctx, promptText) {
       printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
         model: ctx.currentModel,
         modelId: bedrockModelId,
-        region: ctx.region,
+        region: requestRegion,
         inferenceConfig: ctx.inferenceConfig
       }));
     } else {
       console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
     }
-    if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
+    const accountMismatch = accountMismatchFromError(requestError);
+    if (accountMismatch) {
+      console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Das Inference Profile gehoert zu AWS-Konto ${accountMismatch.resourceAccount}, deine Identität nutzt aber Konto ${accountMismatch.callerAccount}. Setze profileArn auf dein eigenes Konto oder nutze die reine Inference-Profile-ID (z. B. ${ctx.currentModel.id}).`);
+    } else if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
       console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
     }
   } else {
@@ -665,6 +705,7 @@ export async function main() {
 
     process.on("SIGTERM", () => {
       ctx.bedrockClient?.destroy?.();
+      destroyRegionalBedrockClients(ctx);
       process.exit(0);
     });
 
