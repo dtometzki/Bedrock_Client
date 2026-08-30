@@ -18,6 +18,68 @@ export function createBedrockClient({ region } = {}) {
   });
 }
 
+// Ein vollqualifizierter Bedrock-ARN (z. B. eines Inference Profiles) ist an die
+// Region im ARN gebunden. Wird er als modelId gegen den Endpoint einer anderen
+// Region aufgerufen, lehnt Bedrock mit "The provided model identifier is invalid."
+// ab. Diese Funktion liest die Region aus einem solchen ARN
+// (arn:<partition>:bedrock:<region>:...), damit der aufrufende Client passend zur
+// ARN-Region erstellt werden kann. Fuer bloße Modell-IDs ohne ARN liefert sie
+// null, sodass die Umgebungsregion greift.
+export function regionFromModelId(modelId) {
+  if (typeof modelId !== "string") return null;
+  const match = modelId.match(/^arn:[^:]*:bedrock:([^:]+):/);
+  return match && match[1] ? match[1] : null;
+}
+
+// Geografische Cross-Region-Inference-Profile werden ueber einen ID-Prefix
+// (us./eu./apac.) an eine Geografie gebunden und muessen aus einer Quellregion
+// dieser Geografie aufgerufen werden. Zu jeder Geografie eine sinnvolle
+// Standard-Quellregion, falls die Umgebungsregion nicht schon dazu passt.
+const GEO_INFERENCE_PROFILES = [
+  { prefix: "us.", inGeography: (region) => region.startsWith("us-"), defaultRegion: "us-east-1" },
+  { prefix: "eu.", inGeography: (region) => region.startsWith("eu-"), defaultRegion: "eu-central-1" },
+  { prefix: "apac.", inGeography: (region) => region.startsWith("ap-"), defaultRegion: "ap-southeast-1" }
+];
+
+// Bestimmt die Region, in der eine modelId aufgerufen werden muss:
+//   1. Ein vollqualifizierter ARN gibt die Region fest vor.
+//   2. Ein geografisches Inference-Profil (us./eu./apac.) laeuft in seiner
+//      Geografie: passt die Umgebungsregion schon dazu, bleibt sie erhalten,
+//      sonst wird die Standard-Quellregion der Geografie genutzt.
+//   3. Alles andere (global., bloße Modell-IDs) nutzt die Umgebungsregion.
+export function regionForModelId(modelId, fallbackRegion) {
+  const arnRegion = regionFromModelId(modelId);
+  if (arnRegion) return arnRegion;
+
+  if (typeof modelId === "string") {
+    for (const geo of GEO_INFERENCE_PROFILES) {
+      if (modelId.startsWith(geo.prefix)) {
+        return fallbackRegion && geo.inGeography(fallbackRegion)
+          ? fallbackRegion
+          : geo.defaultRegion;
+      }
+    }
+  }
+
+  return fallbackRegion;
+}
+
+// Ein AccessDeniedException auf ein Inference Profile hat als haeufigste Ursache
+// eine profileArn, die auf ein fremdes AWS-Konto zeigt (z. B. der Platzhalter
+// aus einer Beispielkonfiguration). Die Fehlermeldung enthaelt sowohl das Konto
+// der aufrufenden Identitaet ("User: arn:aws:sts::<konto>:...") als auch das
+// Konto der Ressource ("on resource: arn:aws:bedrock:<region>:<konto>:..."). Bei
+// Abweichung liefert diese Funktion beide Konten, sonst null.
+export function accountMismatchFromError(err) {
+  const message = err?.message || "";
+  const caller = message.match(/arn:aws[\w-]*:(?:sts|iam)::(\d+):/);
+  const resource = message.match(/resource: arn:aws[\w-]*:bedrock:[^:]*:(\d+):/);
+  if (caller && resource && caller[1] !== resource[1]) {
+    return { callerAccount: caller[1], resourceAccount: resource[1] };
+  }
+  return null;
+}
+
 export function buildInferenceConfig(model, overrides = {}) {
   const config = {
     ...DEFAULT_INFERENCE_CONFIG,

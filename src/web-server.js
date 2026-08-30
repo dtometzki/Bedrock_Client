@@ -5,7 +5,9 @@ import http from "node:http";
 import {
   buildAdaptiveThinkingFields,
   buildInferenceConfig,
+  createBedrockClient,
   formatBedrockErrorMessage,
+  regionForModelId,
   streamConverseWithRetry
 } from "./bedrock.js";
 import { consumeConverseStream } from "./stream-consumer.js";
@@ -362,6 +364,7 @@ export function createWebServer(options = {}) {
     messages: initialMessages = [],
     streamFn = streamConverseWithRetry,
     billingFn = loadCurrentBedrockBillingCost,
+    createClient = createBedrockClient,
     indexHtmlPath = INDEX_HTML_URL,
     persistModelSelection = true,
     persistEffortSelection = persistModelSelection,
@@ -370,6 +373,24 @@ export function createWebServer(options = {}) {
 
   if (!model) {
     throw new Error("Web-Server benoetigt ein aktives Modell.");
+  }
+
+  // Ein Inference-Profile-ARN ist an die Region im ARN gebunden. Modelle koennen
+  // im Web-GUI gewechselt werden, daher wird der passende Client anhand der
+  // modelId aufgeloest: die Umgebungsregion nutzt den uebergebenen Client, davon
+  // abweichende ARN-Regionen bekommen einen eigenen, zwischengespeicherten Client.
+  const regionalClients = new Map();
+  function resolveInvocationClient(modelId) {
+    const targetRegion = regionForModelId(modelId, region);
+    if (!targetRegion || targetRegion === region) {
+      return client;
+    }
+    let regionalClient = regionalClients.get(targetRegion);
+    if (!regionalClient) {
+      regionalClient = createClient({ region: targetRegion });
+      regionalClients.set(targetRegion, regionalClient);
+    }
+    return regionalClient;
   }
 
   const state = {
@@ -634,10 +655,11 @@ export function createWebServer(options = {}) {
       const requestMessages = [...state.messages, userMessage];
 
       const effortConfig = normalizeEffort(state.model);
+      const invocationModelId = getModelInvocationId(state.model);
 
       const { fullResponse, usageRecord, aborted, error } = await consumeConverseStream(
-        streamFn(client, {
-          modelId: getModelInvocationId(state.model),
+        streamFn(resolveInvocationClient(invocationModelId), {
+          modelId: invocationModelId,
           messages: toBedrockMessages(requestMessages),
           system: state.systemPrompt || undefined,
           inferenceConfig: state.inferenceConfig,
@@ -741,6 +763,15 @@ export function createWebServer(options = {}) {
         res.end();
       }
     });
+  });
+
+  // Die zusaetzlich pro ARN-Region angelegten Clients gehoeren dem Server; der
+  // uebergebene Basis-Client wird vom Aufrufer verwaltet und hier nicht zerstoert.
+  server.on("close", () => {
+    for (const regionalClient of regionalClients.values()) {
+      regionalClient?.destroy?.();
+    }
+    regionalClients.clear();
   });
 
   // Begrenzt, wie lange der Server auf den vollstaendigen Request-Body wartet.
