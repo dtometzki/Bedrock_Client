@@ -185,13 +185,14 @@ export function isRequestAllowed(req) {
   return true;
 }
 
-// Liest das Auth-Token aus dem Request: bevorzugt der x-bedrock-token-Header
-// (von der GUI gesetzt), alternativ der ?token=-Query-Parameter (damit die
-// Seite ueberhaupt geladen werden kann).
-function getRequestToken(req, url) {
+// Liest das Auth-Token ausschliesslich aus dem x-bedrock-token-Header.
+// Der ?token=-Query-Parameter wird serverseitig bewusst NICHT akzeptiert:
+// Tokens in URLs landen in Logs und Verlaeufen. Die GUI liest das Token beim
+// ersten Laden clientseitig aus der URL (die Index-Seite ist ohne Token
+// erreichbar, siehe PUBLIC_ROUTES) und sendet es danach nur noch als Header.
+function getRequestToken(req) {
   const header = req.headers?.["x-bedrock-token"];
-  if (header) return String(header);
-  return url.searchParams.get("token") || "";
+  return header ? String(header) : "";
 }
 
 // Konstantzeit-Vergleich ueber die gepruefte Node-Implementierung (C-seitig,
@@ -203,9 +204,9 @@ export function timingSafeEqualStrings(a, b) {
   return bufferA.length === bufferB.length && timingSafeEqual(bufferA, bufferB);
 }
 
-export function isTokenValid(req, url, authToken) {
+export function isTokenValid(req, authToken) {
   if (!authToken) return true;
-  return timingSafeEqualStrings(getRequestToken(req, url), authToken);
+  return timingSafeEqualStrings(getRequestToken(req), authToken);
 }
 
 export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
@@ -744,7 +745,7 @@ export function createWebServer(options = {}) {
 
     // Statische GUI-Dateien bleiben ohne Token erreichbar (siehe
     // PUBLIC_ROUTES; Host-/Origin-Pruefung oben gilt weiterhin).
-    if (!PUBLIC_ROUTES.has(route) && !isTokenValid(req, url, authToken)) {
+    if (!PUBLIC_ROUTES.has(route) && !isTokenValid(req, authToken)) {
       sendJson(res, 403, { error: "Ungueltiges oder fehlendes Token." });
       return;
     }

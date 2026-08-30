@@ -799,16 +799,13 @@ test("timingSafeEqualStrings vergleicht Werte korrekt", () => {
 
 test("isTokenValid ohne konfiguriertes Token laesst alles zu", () => {
   const req = { headers: {} };
-  const url = new URL("http://localhost/api/state");
-  assert.equal(isTokenValid(req, url, ""), true);
+  assert.equal(isTokenValid(req, ""), true);
 });
 
-test("isTokenValid akzeptiert Token via Header und Query", () => {
-  const url = new URL("http://localhost/api/state?token=geheim");
-  assert.equal(isTokenValid({ headers: { "x-bedrock-token": "geheim" } }, new URL("http://localhost/"), "geheim"), true);
-  assert.equal(isTokenValid({ headers: {} }, url, "geheim"), true);
-  assert.equal(isTokenValid({ headers: {} }, new URL("http://localhost/"), "geheim"), false);
-  assert.equal(isTokenValid({ headers: { "x-bedrock-token": "falsch" } }, new URL("http://localhost/"), "geheim"), false);
+test("isTokenValid akzeptiert Token nur via Header, nicht via Query", () => {
+  assert.equal(isTokenValid({ headers: { "x-bedrock-token": "geheim" } }, "geheim"), true);
+  assert.equal(isTokenValid({ headers: {} }, "geheim"), false);
+  assert.equal(isTokenValid({ headers: { "x-bedrock-token": "falsch" } }, "geheim"), false);
 });
 
 test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => {
@@ -823,8 +820,10 @@ test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => 
     const allowedHeader = await fetch(`${url}/api/state`, { headers: { "x-bedrock-token": authToken } });
     assert.equal(allowedHeader.status, 200);
 
-    const allowedQuery = await fetch(`${url}/api/state?token=${authToken}`);
-    assert.equal(allowedQuery.status, 200);
+    // Der Query-Parameter wird serverseitig nicht mehr akzeptiert (Tokens in
+    // URLs landen in Logs); nur der Header authentifiziert.
+    const deniedQuery = await fetch(`${url}/api/state?token=${authToken}`);
+    assert.equal(deniedQuery.status, 403);
 
     // Die statischen GUI-Dateien (HTML/JS ohne Geheimnisse) bleiben ohne Token
     // erreichbar: die Index-Seite fuer den Reload nach dem Entfernen des Tokens
