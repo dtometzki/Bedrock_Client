@@ -199,7 +199,7 @@ Notes:
 - `label` should be short and readable.
 - `disabled` is optional. Set it to `true` to keep a model configured but hide it from selection.
 - `aliases` is optional and lets old saved IDs or alternative names resolve to the same model.
-- `profileArn` is optional. If set, the client sends that ARN to Bedrock while keeping `id` and `label` for selection.
+- `profileArn` is optional. If set, the client sends that ARN to Bedrock while keeping `id` and `label` for selection. A full inference-profile ARN is region-bound (`arn:aws:bedrock:<region>:…`), so the client automatically calls that ARN's region instead of the active profile/region for the request. This prevents a `ValidationException: The provided model identifier is invalid.` when the ARN region differs from your configured region.
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate. If it is omitted, the client falls back to a small built-in price table (see [`src/usage.js`](./src/usage.js), current as of 2026-06); models without a match show `n/a` instead of an estimate. Prefer setting `pricingUsdPer1M` per model so estimates stay accurate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.

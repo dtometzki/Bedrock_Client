@@ -18,6 +18,19 @@ export function createBedrockClient({ region } = {}) {
   });
 }
 
+// Ein vollqualifizierter Bedrock-ARN (z. B. eines Inference Profiles) ist an die
+// Region im ARN gebunden. Wird er als modelId gegen den Endpoint einer anderen
+// Region aufgerufen, lehnt Bedrock mit "The provided model identifier is invalid."
+// ab. Diese Funktion liest die Region aus einem solchen ARN
+// (arn:<partition>:bedrock:<region>:...), damit der aufrufende Client passend zur
+// ARN-Region erstellt werden kann. Fuer bloße Modell-IDs ohne ARN liefert sie
+// null, sodass die Umgebungsregion greift.
+export function regionFromModelId(modelId) {
+  if (typeof modelId !== "string") return null;
+  const match = modelId.match(/^arn:[^:]*:bedrock:([^:]+):/);
+  return match && match[1] ? match[1] : null;
+}
+
 export function buildInferenceConfig(model, overrides = {}) {
   const config = {
     ...DEFAULT_INFERENCE_CONFIG,

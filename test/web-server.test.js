@@ -201,6 +201,78 @@ test("POST /api/model wechselt Modell und nutzt Inference Profile ARN", async ()
   });
 });
 
+test("POST /api/chat ruft ARN-Regionen mit einem passenden Client auf", async () => {
+  const usModel = {
+    id: "us.anthropic.claude-sonnet-5",
+    label: "Sonnet 5",
+    profileArn: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"
+  };
+  const baseClient = { tag: "base" };
+  const createdRegions = [];
+  function createClient({ region }) {
+    createdRegions.push(region);
+    return { tag: `regional:${region}` };
+  }
+  let usedClient;
+  async function* fakeStream(client, params) {
+    usedClient = client;
+    void params;
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({
+    models: [usModel],
+    model: usModel,
+    client: baseClient,
+    region: "eu-central-1",
+    createClient,
+    streamFn: fakeStream
+  }, async ({ url }) => {
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+  });
+
+  // Der us-east-1-ARN darf nicht gegen den eu-central-1-Endpoint laufen.
+  assert.deepEqual(createdRegions, ["us-east-1"]);
+  assert.deepEqual(usedClient, { tag: "regional:us-east-1" });
+});
+
+test("POST /api/chat nutzt den Basis-Client ohne abweichende ARN-Region", async () => {
+  const plainModel = { id: "global.anthropic.claude-sonnet-4-6", label: "Sonnet 4.6" };
+  const baseClient = { tag: "base" };
+  let createClientCalled = false;
+  function createClient() {
+    createClientCalled = true;
+    return { tag: "regional" };
+  }
+  let usedClient;
+  async function* fakeStream(client) {
+    usedClient = client;
+    yield { type: "text", text: "ok" };
+  }
+
+  await withServer({
+    models: [plainModel],
+    model: plainModel,
+    client: baseClient,
+    region: "eu-central-1",
+    createClient,
+    streamFn: fakeStream
+  }, async ({ url }) => {
+    await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hallo" })
+    }).then((res) => res.text());
+  });
+
+  assert.equal(createClientCalled, false);
+  assert.deepEqual(usedClient, { tag: "base" });
+});
+
 test("POST /api/model liefert 404 fuer unbekannte Modelle", async () => {
   await withServer({}, async ({ url }) => {
     const { response, data } = await postJson(`${url}/api/model`, { model: "gibts-nicht" });

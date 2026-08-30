@@ -8,6 +8,7 @@ import {
   getRetryDelayMs,
   isAbortError,
   isRetryableError,
+  regionFromModelId,
   streamConverse,
   streamConverseWithRetry
 } from "../src/bedrock.js";
@@ -106,6 +107,29 @@ test("streamConverse forwards additionalModelRequestFields when present", async 
     void event;
   }
   assert.equal("additionalModelRequestFields" in plainCommand.input, false);
+});
+
+test("regionFromModelId liest die Region aus einem vollqualifizierten Bedrock-ARN", () => {
+  assert.equal(
+    regionFromModelId("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"),
+    "us-east-1"
+  );
+  assert.equal(
+    regionFromModelId("arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-fable-5"),
+    "eu-central-1"
+  );
+  // Nicht-Standard-Partitionen (GovCloud, China) muessen ebenfalls funktionieren.
+  assert.equal(
+    regionFromModelId("arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:inference-profile/x"),
+    "us-gov-west-1"
+  );
+  // Bloße Modell-IDs (auch Cross-Region-Prefixe) haben keine feste Region.
+  assert.equal(regionFromModelId("us.anthropic.claude-sonnet-5"), null);
+  assert.equal(regionFromModelId("global.anthropic.claude-sonnet-4-6"), null);
+  assert.equal(regionFromModelId("anthropic.claude-3-7-sonnet-20250219-v1:0"), null);
+  assert.equal(regionFromModelId(""), null);
+  assert.equal(regionFromModelId(null), null);
+  assert.equal(regionFromModelId(undefined), null);
 });
 
 test("isRetryableError recognizes throttling, status codes and retryable flags", () => {
