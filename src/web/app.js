@@ -2,11 +2,15 @@
   "use strict";
 
   // Der Server erwartet bei aktiviertem Auth-Token dessen Wert in jedem
-  // API-Request. Die Seite wird beim ersten Aufruf mit ?token=... geladen;
+  // API-Request. Die Seite wird beim ersten Aufruf mit #token=... geladen;
   // danach lebt das Token nur noch in sessionStorage (uebersteht Reloads,
   // endet mit dem Tab) und wird als Header bei jedem fetch mitgesendet.
   const TOKEN_STORAGE_KEY = "bedrock-chat-token";
-  const urlToken = new URLSearchParams(location.search).get("token") || "";
+  const fragmentToken = new URLSearchParams(location.hash.replace(/^#/, "")).get("token") || "";
+  // Query-Token nur noch fuer alte Links akzeptieren. Neue Starts verwenden
+  // das Fragment, das bei der HTTP-Anfrage nicht an den Server gesendet wird.
+  const queryToken = new URLSearchParams(location.search).get("token") || "";
+  const urlToken = fragmentToken || queryToken;
   let storedToken = "";
   try {
     if (urlToken) {
@@ -26,6 +30,7 @@
   if (urlToken && window.history?.replaceState) {
     const cleanUrl = new URL(location.href);
     cleanUrl.searchParams.delete("token");
+    cleanUrl.hash = "";
     window.history.replaceState(null, "", cleanUrl.toString());
   }
 

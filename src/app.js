@@ -42,7 +42,7 @@ import {
 import { consumeConverseStream } from "./stream-consumer.js";
 import { createStreamInterruptController, promptForModelSelection, readPrompt } from "./prompt.js";
 import { exportHistoryToMarkdown } from "./export.js";
-import { DEFAULT_WEB_PORT, openInBrowser, startWebServer } from "./web-server.js";
+import { createBrowserBootstrap, DEFAULT_WEB_PORT, openInBrowser, startWebServer } from "./web-server.js";
 import { formatLine, resetResponseFormatting, sanitizeTerminalText } from "./response-format.js";
 import { emptyUsageTotals, printUsageSummary } from "./usage.js";
 
@@ -720,7 +720,7 @@ export async function main() {
     }
 
     if (cliArgs.web) {
-      const { url, authToken } = await startWebServer({
+      const { server, url, authToken } = await startWebServer({
         models,
         model: ctx.currentModel,
         client: ctx.bedrockClient,
@@ -735,15 +735,32 @@ export async function main() {
         effort: ctx.effort,
         port: cliArgs.port ?? DEFAULT_WEB_PORT
       });
-      // Das Token schuetzt den lokalen Server davor, von anderen Prozessen auf
-      // dem Rechner angesteuert zu werden (die echte Bedrock-Kosten verursachen).
-      // Bewusster Kompromiss: Beim automatischen Oeffnen ist die URL samt Token
-      // kurzzeitig in der Prozessliste (ps) sichtbar. Die GUI entfernt das Token
-      // sofort aus der Adresszeile und haelt es nur in sessionStorage.
-      const guiUrl = authToken ? `${url}/?token=${authToken}` : url;
-      console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${guiUrl}`);
-      if (!cliArgs.noOpen) {
-        openInBrowser(guiUrl);
+      let bootstrap = null;
+      try {
+        bootstrap = authToken ? createBrowserBootstrap(url, authToken) : null;
+      } catch (err) {
+        server.close();
+        throw err;
+      }
+
+      const cleanupBootstrap = () => bootstrap?.cleanup();
+      server.once("close", cleanupBootstrap);
+      process.once("exit", cleanupBootstrap);
+
+      console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${url}`);
+      const launchTarget = bootstrap?.path || url;
+      if (cliArgs.noOpen) {
+        console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${launchTarget}`);
+      } else {
+        const opened = openInBrowser(launchTarget);
+        if (opened && bootstrap) {
+          // Genug Zeit fuer einen langsamen Browserstart; danach liegt das
+          // Token nicht mehr als Datei auf der Platte. cleanup ist idempotent.
+          setTimeout(cleanupBootstrap, 30_000).unref();
+        } else if (!opened) {
+          console.log(`${ANSI.yellow}Browser konnte nicht geoeffnet werden.${ANSI.reset}`);
+          console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${launchTarget}`);
+        }
       }
       console.log(`${ANSI.gray}Beenden mit Ctrl+C.${ANSI.reset}`);
       return;

@@ -8,6 +8,7 @@ import { readSavedEffort } from "../src/config.js";
 import { readSession } from "../src/session.js";
 import {
   buildAttachmentBlocks,
+  createBrowserBootstrap,
   getBrowserOpenCommand,
   isRequestAllowed,
   isTokenValid,
@@ -532,6 +533,8 @@ test("GET /app.js und /vendor-Skripte werden lokal ausgeliefert", async () => {
     assert.ok(!allowedAttrs.includes("style"));
     assert.match(app, /ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS/);
     assert.match(app, /ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTRS/);
+    assert.match(app, /location\.hash/);
+    assert.match(app, /cleanUrl\.hash = ""/);
 
     const purify = await fetch(`${url}/vendor/purify.min.js`).then((res) => res.text());
     // DOMPurify muss eine Version mit dem Fix fuer CVE-2026-0540 sein
@@ -758,6 +761,26 @@ test("getBrowserOpenCommand waehlt den plattformspezifischen Befehl", () => {
   assert.deepEqual(getBrowserOpenCommand(url, "darwin"), { command: "open", args: [url] });
   assert.deepEqual(getBrowserOpenCommand(url, "win32"), { command: "cmd", args: ["/c", "start", "", url] });
   assert.deepEqual(getBrowserOpenCommand(url, "linux"), { command: "xdg-open", args: [url] });
+});
+
+test("createBrowserBootstrap verbirgt das Token in einer privaten temporaeren Datei", {
+  skip: process.platform === "win32"
+}, (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-bootstrap-test-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  const bootstrap = createBrowserBootstrap("http://127.0.0.1:3456", "geheim", { tempRoot });
+  const bootstrapDir = path.dirname(bootstrap.path);
+  const html = fs.readFileSync(bootstrap.path, "utf8");
+
+  assert.equal(fs.statSync(bootstrapDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(bootstrap.path).mode & 0o777, 0o600);
+  assert.match(html, /http:\/\/127\.0\.0\.1:3456\/#token=geheim/);
+  assert.ok(!html.includes("<script"));
+
+  bootstrap.cleanup();
+  bootstrap.cleanup();
+  assert.equal(fs.existsSync(bootstrapDir), false);
 });
 
 test("openInBrowser startet den Browser-Befehl entkoppelt", () => {

@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import {
   buildAdaptiveThinkingFields,
   buildInferenceConfig,
@@ -791,6 +793,68 @@ export function getBrowserOpenCommand(url, platform = process.platform) {
     return { command: "cmd", args: ["/c", "start", "", url] };
   }
   return { command: "xdg-open", args: [url] };
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Uebergibt das Auth-Token ueber eine private temporaere HTML-Datei an den
+// Browser. Der Browser-Prozess erhaelt dadurch nur den Dateipfad als Argument;
+// das Token erscheint weder in der Prozessliste noch in der Terminalausgabe.
+// Das URL-Fragment wird nicht an den HTTP-Server gesendet und von der GUI nach
+// dem Einlesen sofort aus der Adresszeile entfernt.
+export function createBrowserBootstrap(url, authToken, { tempRoot = os.tmpdir() } = {}) {
+  const bootstrapDir = fs.mkdtempSync(path.join(tempRoot, "bedrock-chat-"));
+  const bootstrapPath = path.join(bootstrapDir, "open.html");
+
+  try {
+    if (process.platform !== "win32") {
+      fs.chmodSync(bootstrapDir, 0o700);
+    }
+    const targetUrl = new URL(url);
+    targetUrl.hash = new URLSearchParams({ token: String(authToken) }).toString();
+    const escapedTarget = escapeHtmlAttribute(targetUrl.toString());
+    const html = [
+      "<!doctype html>",
+      "<html><head><meta charset=\"utf-8\">",
+      "<meta name=\"referrer\" content=\"no-referrer\">",
+      `<meta http-equiv="refresh" content="0;url=${escapedTarget}">`,
+      "<title>Bedrock Chat wird geoeffnet</title></head>",
+      `<body><a href="${escapedTarget}">Bedrock Chat oeffnen</a></body></html>\n`
+    ].join("");
+    fs.writeFileSync(bootstrapPath, html, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx"
+    });
+  } catch (err) {
+    try {
+      fs.rmSync(bootstrapDir, { recursive: true, force: true });
+    } catch {
+      // Der urspruengliche Erstellungsfehler ist fuer den Aufrufer relevant.
+    }
+    throw err;
+  }
+
+  let cleanedUp = false;
+  return {
+    path: bootstrapPath,
+    cleanup() {
+      if (cleanedUp) return;
+      try {
+        fs.rmSync(bootstrapDir, { recursive: true, force: true });
+        cleanedUp = true;
+      } catch {
+        // Best effort, z. B. wenn Windows die gerade geoeffnete Datei noch
+        // sperrt. Beim Schliessen des Servers wird cleanup erneut versucht.
+      }
+    }
+  };
 }
 
 export function openInBrowser(url, { platform = process.platform, spawnFn = spawn } = {}) {
