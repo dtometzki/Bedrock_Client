@@ -65,6 +65,20 @@
   const MAX_ATTACHMENT_BYTES = 4.5 * 1000 * 1000;
   const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", max: "Max" };
 
+  // Modelltext ist nicht vertrauenswuerdig. Eine enge Allowlist erhaelt die
+  // uebliche Markdown-Formatierung, entfernt aber insbesondere style-Tags,
+  // style-Attribute, Formulare und andere interaktive HTML-Elemente. Sonst
+  // koennte eine manipulierte Modellantwort die gesamte GUI ueberdecken oder
+  // Bedienelemente vortaeuschen.
+  const MARKDOWN_ALLOWED_TAGS = Object.freeze([
+    "a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6",
+    "hr", "img", "li", "ol", "p", "pre", "strong", "table", "tbody", "td", "th", "thead",
+    "tr", "ul"
+  ]);
+  const MARKDOWN_ALLOWED_ATTRS = Object.freeze([
+    "align", "alt", "href", "src", "start", "title"
+  ]);
+
   let busy = false;
   let currentSystemPrompt = "";
   let pendingAttachments = [];
@@ -77,7 +91,10 @@
 
   function renderMarkdown(text) {
     if (markdownReady) {
-      return DOMPurify.sanitize(marked.parse(text));
+      return DOMPurify.sanitize(marked.parse(text), {
+        ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+        ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTRS
+      });
     }
     const div = document.createElement("div");
     div.textContent = text;

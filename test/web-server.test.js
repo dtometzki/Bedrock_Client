@@ -517,6 +517,22 @@ test("GET /app.js und /vendor-Skripte werden lokal ausgeliefert", async () => {
       assert.equal(response.status, 200, `${route} sollte 200 liefern`);
       assert.match(response.headers.get("content-type"), /text\/javascript/);
     }
+    const app = await fetch(`${url}/app.js`).then((res) => res.text());
+    const allowedTagsSource = app.match(
+      /const MARKDOWN_ALLOWED_TAGS = Object\.freeze\((\[[\s\S]*?\])\);/
+    );
+    const allowedAttrsSource = app.match(
+      /const MARKDOWN_ALLOWED_ATTRS = Object\.freeze\((\[[\s\S]*?\])\);/
+    );
+    assert.ok(allowedTagsSource, "Markdown-Tag-Allowlist erwartet");
+    assert.ok(allowedAttrsSource, "Markdown-Attribut-Allowlist erwartet");
+    const allowedTags = JSON.parse(allowedTagsSource[1]);
+    const allowedAttrs = JSON.parse(allowedAttrsSource[1]);
+    assert.ok(!allowedTags.some((tag) => ["style", "form", "input", "button"].includes(tag)));
+    assert.ok(!allowedAttrs.includes("style"));
+    assert.match(app, /ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS/);
+    assert.match(app, /ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTRS/);
+
     const purify = await fetch(`${url}/vendor/purify.min.js`).then((res) => res.text());
     // DOMPurify muss eine Version mit dem Fix fuer CVE-2026-0540 sein
     // (>= 3.3.2); die 3.1.x vom frueheren CDN-Stand war verwundbar.

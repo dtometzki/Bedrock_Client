@@ -35,6 +35,18 @@ export function formatHistoryMarkdown(messages, { modelLabel, systemPrompt, expo
 
 export function exportHistoryToMarkdown(messages, targetPath, meta = {}) {
   const resolvedPath = path.resolve(targetPath || defaultExportFilename());
-  fs.writeFileSync(resolvedPath, formatHistoryMarkdown(messages, meta), "utf8");
+  const fileDescriptor = fs.openSync(resolvedPath, "w", 0o600);
+  try {
+    // openSync wendet den Modus nur bei neuen Dateien an. fchmodSync zieht
+    // deshalb auch eine bereits vorhandene, zu offen lesbare Zieldatei auf
+    // POSIX-Systemen auf private Rechte, bevor der vertrauliche Chat-Inhalt
+    // geschrieben wird. Unter Windows gelten stattdessen die Verzeichnis-ACLs.
+    if (process.platform !== "win32") {
+      fs.fchmodSync(fileDescriptor, 0o600);
+    }
+    fs.writeFileSync(fileDescriptor, formatHistoryMarkdown(messages, meta), "utf8");
+  } finally {
+    fs.closeSync(fileDescriptor);
+  }
   return resolvedPath;
 }
