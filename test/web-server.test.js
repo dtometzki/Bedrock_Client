@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { readSavedEffort } from "../src/config.js";
-import { readSession } from "../src/session.js";
+import { getSessionPath, readSession, writeSession } from "../src/session.js";
 import {
   buildAttachmentBlocks,
   createBrowserBootstrap,
@@ -80,6 +80,142 @@ function parseSseEvents(rawBody) {
     .filter((part) => part.startsWith("data:"))
     .map((part) => JSON.parse(part.slice(5)));
 }
+
+async function withTempSession(run) {
+  const previous = process.env.BEDROCK_CHAT_CONFIG_DIR;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-session-errors-"));
+  process.env.BEDROCK_CHAT_CONFIG_DIR = directory;
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) delete process.env.BEDROCK_CHAT_CONFIG_DIR;
+    else process.env.BEDROCK_CHAT_CONFIG_DIR = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("Ungueltige Request-URLs liefern 400 vor Auth und lassen den Server erreichbar", async () => {
+  await withServer({ authToken: "test-token" }, async ({ url }) => {
+    for (const requestPath of ["//", "http://["]) {
+      const status = await new Promise((resolve, reject) => {
+        const req = http.request({
+          hostname: "127.0.0.1", port: new URL(url).port, path: requestPath
+        }, (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode));
+        });
+        req.on("error", reject);
+        req.end();
+      });
+      assert.equal(status, 400);
+    }
+    assert.equal((await fetch(`${url}/api/state`)).status, 403);
+    const state = await fetch(`${url}/api/state`, { headers: { "x-bedrock-token": "test-token" } });
+    assert.equal(state.status, 200);
+  });
+});
+
+test("Fehlerhafte Chat-Eingaben liefern 400 und sperren folgende Nachrichten nicht", async () => {
+  let calls = 0;
+  async function* fakeStream() {
+    calls += 1;
+    yield { type: "text", text: "Antwort" };
+  }
+  const invalidBodies = [
+    "{", "null", "[]", '"text"',
+    ...[
+      { message: { toString: null } },
+      { message: null },
+      { message: 42 },
+      { message: [] },
+      { message: "Hallo", attachments: {} },
+      { message: "Hallo", attachments: null },
+      { attachments: [null] },
+      { attachments: [{ name: { toString: null }, dataBase64: "eA==" }] },
+      { attachments: [{ name: "x.txt", dataBase64: { toString: null } }] }
+    ].map((body) => JSON.stringify(body))
+  ];
+  await withServer({ streamFn: fakeStream, authToken: "test-token" }, async ({ url, getState }) => {
+    const headers = { "Content-Type": "application/json", "x-bedrock-token": "test-token" };
+    for (const body of invalidBodies) {
+      const response = await fetch(`${url}/api/chat`, { method: "POST", headers, body });
+      assert.equal(response.status, 400, body);
+      assert.ok((await response.json()).error);
+      assert.equal(getState().busy, false);
+      assert.deepEqual(getState().messages, []);
+    }
+    assert.equal(calls, 0);
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST", headers, body: JSON.stringify({ message: "Hallo" })
+    });
+    assert.equal(parseSseEvents(await response.text()).at(-1).failed, false);
+    assert.equal(calls, 1);
+    assert.equal(getState().messages.length, 2);
+  });
+});
+
+test("Fehlgeschlagenes Loeschen meldet Fehler und behaelt Verlauf bis zum erfolgreichen Retry", async (t) => {
+  await withTempSession(async () => {
+    const messages = [{ role: "user", content: [{ text: "Privater Verlauf" }] }];
+    assert.equal(writeSession(messages), true);
+    const originalRm = fs.rmSync;
+    const mockRm = t.mock.method(fs, "rmSync", (target, options) => {
+      if (target === getSessionPath()) throw Object.assign(new Error("Permission denied"), { code: "EACCES" });
+      return originalRm(target, options);
+    });
+    await withServer({ autoSave: true, messages }, async ({ url, getState }) => {
+      const before = getState().messages;
+      const failed = await postJson(`${url}/api/clear`);
+      assert.equal(failed.response.status, 500);
+      assert.match(failed.data.error, /nicht geloescht/);
+      assert.deepEqual(getState().messages, before);
+      assert.deepEqual(readSession().messages, messages);
+
+      mockRm.mock.restore();
+      const cleared = await postJson(`${url}/api/clear`);
+      assert.equal(cleared.response.status, 200);
+      assert.deepEqual(getState().messages, []);
+      assert.equal(fs.existsSync(getSessionPath()), false);
+    });
+  });
+});
+
+test("Speicherfehler warnen ohne erfolgreiche Antwort zu verwerfen; erneutes Speichern funktioniert", async (t) => {
+  await withTempSession(async () => {
+    const messages = [
+      { role: "user", content: [{ text: "Frage" }] },
+      { role: "assistant", content: [{ text: "Antwort" }] }
+    ];
+    assert.equal(writeSession(messages), true);
+    const originalRename = fs.renameSync;
+    const mockRename = t.mock.method(fs, "renameSync", (source, target) => {
+      if (target === getSessionPath()) throw Object.assign(new Error("No space left"), { code: "ENOSPC" });
+      return originalRename(source, target);
+    });
+    async function* fakeStream() {
+      yield { type: "text", text: "Neue Antwort" };
+    }
+    await withServer({ autoSave: true, messages, streamFn: fakeStream }, async ({ url, getState }) => {
+      const response = await fetch(`${url}/api/chat`, {
+        method: "POST", body: JSON.stringify({ message: "Weitere Frage" })
+      });
+      const done = parseSseEvents(await response.text()).at(-1);
+      assert.equal(done.type, "done");
+      assert.equal(done.failed, false);
+      assert.match(done.warning, /nicht gespeichert/);
+      assert.equal(getState().busy, false);
+      assert.equal(getState().messages.length, 4);
+      assert.deepEqual(readSession().messages, messages);
+
+      mockRename.mock.restore();
+      const next = await fetch(`${url}/api/chat`, {
+        method: "POST", body: JSON.stringify({ message: "Noch eine Frage" })
+      });
+      assert.equal(parseSseEvents(await next.text()).at(-1).warning, undefined);
+      assert.equal(readSession().messages.length, 6);
+    });
+  });
+});
 
 test("GET /api/state liefert Modelle, aktives Modell und Verlauf", async () => {
   await withServer({

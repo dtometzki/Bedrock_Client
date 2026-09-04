@@ -420,6 +420,7 @@
     const metaEl = document.createElement("div");
     metaEl.className = "meta";
     const metaParts = [];
+    if (meta && meta.warning) metaParts.push(meta.warning);
     if (meta && meta.aborted) metaParts.push("Antwort abgebrochen");
     if (meta && meta.usage) {
       metaParts.push(meta.usage.totalTokens.toLocaleString("de-DE") + " Tokens");

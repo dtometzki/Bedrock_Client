@@ -85,9 +85,13 @@ function sanitizeDocumentName(name) {
 }
 
 export function buildAttachmentBlock(attachment) {
-  const name = String(attachment?.name || "");
+  if (!attachment || typeof attachment !== "object" || Array.isArray(attachment) ||
+      typeof attachment.name !== "string" || typeof attachment.dataBase64 !== "string") {
+    return { error: "Anhang muss name und dataBase64 als Text enthalten." };
+  }
+  const name = attachment.name;
   const extension = (name.match(/\.([^.]+)$/)?.[1] || "").toLowerCase();
-  const dataBase64 = String(attachment?.dataBase64 || "");
+  const dataBase64 = attachment.dataBase64;
 
   if (!dataBase64) {
     return { error: `Anhang ohne Inhalt: ${name || "unbenannt"}` };
@@ -130,8 +134,11 @@ export function buildAttachmentBlock(attachment) {
 }
 
 export function buildAttachmentBlocks(attachments) {
-  if (!Array.isArray(attachments) || !attachments.length) {
+  if (attachments === undefined) {
     return { blocks: [], displayNames: [] };
+  }
+  if (!Array.isArray(attachments)) {
+    return { error: "Anhaenge muessen als Array angegeben werden." };
   }
   if (attachments.length > MAX_ATTACHMENTS) {
     return { error: `Zu viele Anhaenge (max. ${MAX_ATTACHMENTS}).` };
@@ -409,9 +416,7 @@ export function createWebServer(options = {}) {
   };
 
   function persistSession() {
-    if (autoSave) {
-      writeSession(toPersistableMessages(state.messages), { modelId: state.model.id });
-    }
+    return !autoSave || writeSession(toPersistableMessages(state.messages), { modelId: state.model.id });
   }
 
   function getStatePayload() {
@@ -524,10 +529,11 @@ export function createWebServer(options = {}) {
       sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
       return;
     }
-    state.messages = [];
-    if (autoSave) {
-      clearSession();
+    if (autoSave && !clearSession()) {
+      sendJson(res, 500, { error: "Gespeicherter Verlauf konnte nicht geloescht werden. Der Verlauf wurde beibehalten." });
+      return;
     }
+    state.messages = [];
     sendJson(res, 200, getStatePayload());
   }
 
@@ -600,35 +606,35 @@ export function createWebServer(options = {}) {
     // passieren und gleichzeitig streamen (Race auf state.messages/abortController).
     state.busy = true;
 
-    let body;
+    // Auch Validierung und Vorbereitung muessen busy bei jedem Fehler freigeben.
     try {
-      body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
-    } catch (err) {
-      state.busy = false;
-      sendJson(res, 400, { error: err.message });
-      return;
-    }
+      let body;
+      try {
+        body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
 
-    const message = String(body?.message ?? "").trim();
-    const attachmentResult = buildAttachmentBlocks(body?.attachments);
-    if (attachmentResult.error) {
-      state.busy = false;
-      sendJson(res, 400, { error: attachmentResult.error });
-      return;
-    }
-    if (!message && !attachmentResult.blocks.length) {
-      state.busy = false;
-      sendJson(res, 400, { error: "Leere Nachricht." });
-      return;
-    }
+      if (!body || typeof body !== "object" || Array.isArray(body) ||
+          (body.message !== undefined && typeof body.message !== "string")) {
+        sendJson(res, 400, { error: "Nachricht muss ein JSON-Objekt mit optionalem Textfeld message sein." });
+        return;
+      }
+      const message = (body.message ?? "").trim();
+      const attachmentResult = buildAttachmentBlocks(body.attachments);
+      if (attachmentResult.error) {
+        sendJson(res, 400, { error: attachmentResult.error });
+        return;
+      }
+      if (!message && !attachmentResult.blocks.length) {
+        sendJson(res, 400, { error: "Leere Nachricht." });
+        return;
+      }
 
-    const abortController = new AbortController();
-    state.abortController = abortController;
+      const abortController = new AbortController();
+      state.abortController = abortController;
 
-    // try/finally stellt sicher, dass busy/abortController auch bei einem
-    // unerwarteten Fehler zurueckgesetzt werden. Sonst blockiert der Server
-    // dauerhaft alle weiteren Anfragen mit 409.
-    try {
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
@@ -697,17 +703,21 @@ export function createWebServer(options = {}) {
         send({ type: "error", message: formatBedrockErrorMessage(error) });
       }
 
+      let warning = "";
       if (!failed && fullResponse) {
         state.messages = limitAttachmentHistory(
           appendAssistantResponse(requestMessages, fullResponse, { aborted, maxTurns })
         );
-        persistSession();
+        if (!persistSession()) {
+          warning = "Verlauf konnte nicht gespeichert werden. Neue Nachrichten sind nur in dieser Sitzung verfuegbar.";
+        }
       }
 
       send({
         type: "done",
         aborted,
         failed,
+        ...(warning && { warning }),
         usage: toPublicUsageRecord(usageRecord)
       });
       if (!res.writableEnded) {
@@ -741,7 +751,13 @@ export function createWebServer(options = {}) {
       return;
     }
 
-    const url = new URL(req.url, "http://localhost");
+    let url;
+    try {
+      url = new URL(req.url, "http://localhost");
+    } catch {
+      sendJson(res, 400, { error: "Ungueltige Request-URL." });
+      return;
+    }
     const { pathname } = url;
     const route = `${req.method} ${pathname}`;
 
@@ -759,7 +775,7 @@ export function createWebServer(options = {}) {
       return;
     }
 
-    Promise.resolve(handler(req, res)).catch((err) => {
+    Promise.resolve().then(() => handler(req, res)).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 500, { error: err.message });
       } else {

@@ -127,14 +127,16 @@ function matchesCommand(input, name) {
 }
 
 function clearSessionIfEnabled(ctx) {
-  if (ctx.autoSaveEnabled) {
-    clearSession();
+  if (ctx.autoSaveEnabled && !clearSession()) {
+    console.error(`${ANSI.yellow}Gespeicherter Verlauf konnte nicht geloescht werden.${ANSI.reset}`);
+    return false;
   }
+  return true;
 }
 
 function persistSession(ctx) {
-  if (ctx.autoSaveEnabled) {
-    writeSession(ctx.messages, { modelId: ctx.modelId });
+  if (ctx.autoSaveEnabled && !writeSession(ctx.messages, { modelId: ctx.modelId })) {
+    console.error(`${ANSI.yellow}Warnung: Verlauf konnte nicht gespeichert werden. Neue Nachrichten sind nur in dieser Sitzung verfuegbar.${ANSI.reset}`);
   }
 }
 
@@ -166,8 +168,10 @@ async function cmdHelp(input) {
 }
 
 async function cmdClear(_input, ctx) {
+  if (!clearSessionIfEnabled(ctx)) {
+    return { signal: "handled" };
+  }
   ctx.messages = [];
-  clearSessionIfEnabled(ctx);
   console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
   console.log(terminalLine());
   return { signal: "handled" };
@@ -262,13 +266,13 @@ async function cmdProfile(input, ctx) {
     destroyRegionalBedrockClients(ctx);
     ctx.bedrockClient = createBedrockClient({ region: ctx.region });
     ctx.messages = [];
-    clearSessionIfEnabled(ctx);
+    const sessionCleared = clearSessionIfEnabled(ctx);
     console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
     if (ctx.identityLabel) {
       console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${ctx.identityLabel}`);
     }
     console.log(`${ANSI.green}Region:${ANSI.reset} ${ctx.region}`);
-    console.log(`${ANSI.gray}Verlauf geleert.${ANSI.reset}`);
+    console.log(`${ANSI.gray}${sessionCleared ? "Verlauf geleert." : "Nur der Verlauf im Arbeitsspeicher wurde geleert; die gespeicherte Sitzung bleibt erhalten."}${ANSI.reset}`);
     console.log(terminalLine());
   } catch (err) {
     console.error(`${ANSI.yellow}${err.message}${ANSI.reset}`);
