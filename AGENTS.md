@@ -38,6 +38,13 @@ Tests, Dokumentation und Konfiguration.
    sowie das Ergebnis nennen. Wenn ein erforderlicher Check, ein Review oder
    eine Berechtigung fehlt, den konkreten offenen Punkt melden; nicht als
    gemergt ausgeben.
+10. Nach bestaetigtem PR-Merge kann der zugehoerige Arbeitsbranch lokal und auf
+    dem Remote bereinigt werden. Zuerst auf die Zielbranch wechseln und den
+    gemergten Stand per Fast-forward uebernehmen. Vor dem Loeschen sicherstellen,
+    dass keine ungesicherten Aenderungen, nicht uebernommenen Folge-Commits,
+    weiteren offenen PRs oder aktiven Worktrees auf diesen Branch angewiesen
+    sind. Nur den abgeschlossenen Arbeitsbranch loeschen; `main` und andere
+    geschuetzte Branches behalten. Bei Unsicherheit den Branch stehen lassen.
 
 Auch Aenderungen an dieser Datei folgen diesem Workflow. Eine ausdrueckliche
 Anweisung des Nutzers, beispielsweise nur einen Entwurf zu erstellen oder noch
