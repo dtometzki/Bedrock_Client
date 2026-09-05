@@ -15,7 +15,7 @@
      DOM-Parsing, daher darf app.js direkt auf die Elemente zugreifen. -->
 <script src="/vendor/marked.min.js" defer></script>
 <script src="/vendor/purify.min.js" defer></script>
-<script src="/app.js" defer></script>
+<script src="/app.js" type="module"></script>
 <style>
   :root {
     --bg: #262624;
@@ -329,6 +329,9 @@
   #authDialog input, #authDialog select { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 9px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
   #authDialog .auth-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
   #authDialog [hidden] { display: none; }
+  #authDialog #authRevealField { display: flex; align-items: center; gap: 8px; }
+  #authDialog #authReveal { width: auto; margin: 0; }
+  #authDialog #authRevealField[hidden] { display: none; }
   #authFeedback { white-space: pre-wrap; }
 </style>
 </head>
@@ -347,6 +350,7 @@
     <label id="authOldField" hidden>Bisheriges Masterpasswort<input id="authOld" type="password" autocomplete="off" maxlength="1024"></label>
     <label id="authPasswordField" hidden><span id="authPasswordLabel">Masterpasswort</span><input id="authPassword" type="password" autocomplete="off" maxlength="1024"></label>
     <label id="authConfirmField" hidden>Neues Masterpasswort wiederholen<input id="authConfirm" type="password" autocomplete="off" maxlength="1024"></label>
+    <label id="authRevealField" hidden><input id="authReveal" type="checkbox">Schlüssel und Passwörter anzeigen</label>
     <label id="authDeleteField" hidden>Unwiderruflich löschen: TRESOR LOESCHEN eingeben<input id="authDelete" autocomplete="off" maxlength="32"></label>
     <p id="authRecovery" hidden>Ohne Masterpasswort können die Schlüssel nicht wiederhergestellt werden. Zurücksetzen löscht den gespeicherten Zugang.</p>
     <div class="auth-actions"><button type="submit" class="primary" id="authSubmit">Ausführen</button><button type="button" id="authCheck">AWS-Verbindung prüfen</button><button type="button" id="authLock">Jetzt sperren</button><button type="button" id="authClose">Schließen</button></div>

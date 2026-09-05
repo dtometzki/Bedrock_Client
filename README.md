@@ -60,6 +60,8 @@ node app_aws.js --auth-setup
 
 Both interfaces use the same vault file. The GUI and terminal commands remain available even if credentials are missing, locked or expired. Setting up the vault needs no AWS request. Choose an existing **role profile**, enter a permanent Access Key ID and Secret Access Key, and choose a master password of at least 12 characters. Repeat the password to confirm it. Keys and passwords are entered in hidden fields; do not pass them in command arguments or environment variables.
 
+In the web form, **Schlüssel und Passwörter anzeigen** makes your current input readable so you can check pasted values. Closing the dialog, changing its action or submitting the credentials clears the fields and hides them again. Invalid key formats, short master passwords and mismatched password confirmations are checked before submission; these errors preserve your input for correction. Stored keys are never loaded back into the form.
+
 For example, the local AWS config can contain the following non-secret role metadata (replace the example account and role):
 
 ```ini

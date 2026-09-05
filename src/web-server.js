@@ -31,6 +31,7 @@ const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
 // damit gibt es keinerlei Pfad-Traversal-Flaeche.
 const STATIC_SCRIPTS = new Map([
   ["GET /app.js", new URL("./web/app.js", import.meta.url)],
+  ["GET /auth-form.js", new URL("./web/auth-form.js", import.meta.url)],
   ["GET /vendor/marked.min.js", new URL("./web/vendor/marked.min.js", import.meta.url)],
   ["GET /vendor/purify.min.js", new URL("./web/vendor/purify.min.js", import.meta.url)]
 ]);

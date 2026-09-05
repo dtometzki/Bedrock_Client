@@ -1,3 +1,5 @@
+import { initAuthForm } from "./auth-form.js";
+
 (() => {
   "use strict";
 
@@ -625,9 +627,7 @@
     profile: "AWS-Profil wechseln", password: "Masterpasswort ändern", delete: "Tresor löschen / zurücksetzen",
     mode: "Anmeldeart wechseln"
   };
-  function clearAuthInputs() {
-    for (const id of ["authAccess", "authSecret", "authOld", "authPassword", "authConfirm", "authDelete"]) authEl(id).value = "";
-  }
+  const clearAuthInputs = initAuthForm(authEl, { isWorking: () => authWorking, submit: performAuth });
   function renderAuthProfiles() {
     const action = authEl("authAction").value;
     const awsMode = (action === "mode" && authEl("authMode").value === "aws") || (action === "profile" && authState?.mode === "aws");
@@ -656,6 +656,7 @@
       authAccessField: ["setup", "update"].includes(action), authSecretField: ["setup", "update"].includes(action),
       authOldField: action === "password", authPasswordField: ["setup", "unlock", "password"].includes(action),
       authConfirmField: ["setup", "password"].includes(action), authDeleteField: action === "delete",
+      authRevealField: ["setup", "update", "unlock", "password"].includes(action),
       authRecovery: ["setup", "delete", "password"].includes(action)
     };
     for (const [id, show] of Object.entries(visible)) authEl(id).hidden = !show;
@@ -736,26 +737,6 @@
   authEl("authMode").addEventListener("change", showAuthFields);
   authEl("authLock").addEventListener("click", () => performAuth("lock", {}));
   authEl("authCheck").addEventListener("click", () => performAuth("check", {}));
-  authEl("authForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (authWorking) return;
-    const action = authEl("authAction").value;
-    const body = {};
-    if (["setup", "update", "profile"].includes(action)) body.profile = authEl("authProfile").value;
-    if (["setup", "update"].includes(action)) {
-      body.accessKeyId = authEl("authAccess").value;
-      body.secretAccessKey = authEl("authSecret").value;
-    }
-    if (["setup", "unlock", "password"].includes(action)) body.password = authEl("authPassword").value;
-    if (["setup", "password"].includes(action)) body.confirmation = authEl("authConfirm").value;
-    if (action === "password") body.oldPassword = authEl("authOld").value;
-    if (action === "delete") body.confirmation = authEl("authDelete").value;
-    if (action === "mode") {
-      body.mode = authEl("authMode").value;
-      if (body.mode === "aws" && authEl("authProfile").value) body.profile = authEl("authProfile").value;
-    }
-    performAuth(action, body);
-  });
   let lastActivitySent = 0;
   for (const eventName of ["keydown", "click"]) document.addEventListener(eventName, (event) => {
     if (!event.isTrusted || !authState || authState.locked || Date.now() - lastActivitySent < 15000) return;
