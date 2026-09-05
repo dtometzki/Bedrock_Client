@@ -649,7 +649,7 @@ test("GET / setzt eine strikte Content-Security-Policy ohne unsafe-inline-Skript
 
 test("GET /app.js und /vendor-Skripte werden lokal ausgeliefert", async () => {
   await withServer({}, async ({ url }) => {
-    for (const route of ["/app.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+    for (const route of ["/app.js", "/auth-form.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
       const response = await fetch(`${url}${route}`);
       assert.equal(response.status, 200, `${route} sollte 200 liefern`);
       assert.match(response.headers.get("content-type"), /text\/javascript/);
@@ -732,7 +732,8 @@ test("GET /api/usage faengt Billing-Fehler ab", async () => {
     const response = await fetch(`${url}/api/usage`);
     assert.equal(response.status, 200);
     const data = await response.json();
-    assert.match(data.billing.error, /Cost Explorer nicht erreichbar/);
+    assert.match(data.billing.error, /AWS-Anmeldung oder Verbindung fehlgeschlagen/);
+    assert.ok(!data.billing.error.includes("Cost Explorer nicht erreichbar"));
     assert.equal(data.session.requests, 0);
   });
 });
@@ -1004,7 +1005,7 @@ test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => 
     // erreichbar: die Index-Seite fuer den Reload nach dem Entfernen des Tokens
     // aus der URL, die Skripte, weil <script src> keinen Token-Header mitsendet.
     // Alle API-Routen verlangen weiterhin das Token.
-    for (const route of ["/", "/app.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+    for (const route of ["/", "/app.js", "/auth-form.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
       const withoutToken = await fetch(`${url}${route}`);
       assert.notEqual(withoutToken.status, 403, `${route} sollte ohne Token erreichbar sein`);
     }

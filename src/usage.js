@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { awsLoginCommand, getCommandErrorText, isExpiredAwsSession } from "./aws-context.js";
+import { combineAbortSignals } from "./abort-signals.js";
+import { CostExplorerClient, GetDimensionValuesCommand, GetCostAndUsageCommand } from "@aws-sdk/client-cost-explorer";
+import { safeAwsError } from "./auth.js";
 import { ANSI, formatInteger, formatLatency, formatUsd, terminalLine } from "./ui.js";
-
-const execFileAsync = promisify(execFile);
 
 // Eingebaute Fallback-Preise (USD pro 1 Mio. Tokens) fuer die Session-Kostenschaetzung.
 // Diese Tabelle veraltet, sobald AWS/Anthropic ihre Preise aendern. Bevorzugt wird
@@ -137,98 +135,52 @@ function getCurrentBillingPeriod() {
   };
 }
 
-export async function loadCurrentBedrockBillingCost() {
+export async function loadCurrentBedrockBillingCost({ auth = null, abortSignal, createClient = (config) => new CostExplorerClient(config) } = {}) {
   const period = getCurrentBillingPeriod();
-
+  let client;
+  let operation;
   try {
-    const { stdout: dimensionJson } = await execFileAsync("aws", [
-      "ce",
-      "get-dimension-values",
-      "--time-period",
-      `Start=${period.start},End=${period.end}`,
-      "--dimension",
-      "SERVICE",
-      "--search-string",
-      "Bedrock",
-      "--region",
-      "us-east-1",
-      "--output",
-      "json"
-    ], {
-      encoding: "utf8",
-      timeout: 15000
-    });
-    const dimensionValues = JSON.parse(dimensionJson).DimensionValues || [];
-    const serviceNames = dimensionValues
-      .map((dimension) => dimension.Value)
-      .filter(Boolean);
-
-    if (!serviceNames.length) {
-      return {
-        amount: 0,
-        unit: "USD",
-        estimated: false,
-        period,
-        serviceNames: []
-      };
+    operation = auth?.begin({ signal: abortSignal });
+    const config = auth ? await auth.clientConfig() : {};
+    client = createClient({ ...config, region: "us-east-1", maxAttempts: 2 });
+    auth?.track(client);
+    const signal = combineAbortSignals([AbortSignal.timeout(15000), ...(operation ? [operation.signal] : abortSignal ? [abortSignal] : [])]);
+    const dimensionNames = new Set();
+    let nextToken;
+    for (let page = 0; page < 20; page++) {
+      const dimensions = await client.send(new GetDimensionValuesCommand({
+        TimePeriod: { Start: period.start, End: period.end }, Dimension: "SERVICE",
+        SearchString: "Bedrock", ...(nextToken && { NextPageToken: nextToken })
+      }), { abortSignal: signal });
+      if (auth) auth.assertGeneration(operation.epoch);
+      for (const entry of dimensions.DimensionValues || []) if (entry.Value) dimensionNames.add(entry.Value);
+      nextToken = dimensions.NextPageToken;
+      if (!nextToken) break;
     }
-
-    const filter = JSON.stringify({
-      Dimensions: {
-        Key: "SERVICE",
-        Values: serviceNames
-      }
-    });
-    const { stdout: billingJson } = await execFileAsync("aws", [
-      "ce",
-      "get-cost-and-usage",
-      "--time-period",
-      `Start=${period.start},End=${period.end}`,
-      "--granularity",
-      "MONTHLY",
-      "--metrics",
-      "UnblendedCost",
-      "--filter",
-      filter,
-      "--region",
-      "us-east-1",
-      "--output",
-      "json"
-    ], {
-      encoding: "utf8",
-      timeout: 15000
-    });
-
-    const parsed = JSON.parse(billingJson);
+    if (nextToken) throw new Error("Pagination limit");
+    const serviceNames = [...dimensionNames];
+    if (!serviceNames.length) return { amount: 0, unit: "USD", estimated: false, period, serviceNames };
+    const parsed = await client.send(new GetCostAndUsageCommand({
+      TimePeriod: { Start: period.start, End: period.end }, Granularity: "MONTHLY",
+      Metrics: ["UnblendedCost"], Filter: { Dimensions: { Key: "SERVICE", Values: serviceNames } }
+    }), { abortSignal: signal });
+    if (auth) auth.assertGeneration(operation.epoch);
     const result = parsed.ResultsByTime?.[0];
-    const amount = Number(result?.Total?.UnblendedCost?.Amount || 0);
-    const unit = result?.Total?.UnblendedCost?.Unit || "USD";
-
     return {
-      amount,
-      unit,
-      estimated: Boolean(result?.Estimated),
-      period,
-      serviceNames
+      amount: Number(result?.Total?.UnblendedCost?.Amount || 0),
+      unit: result?.Total?.UnblendedCost?.Unit || "USD", estimated: Boolean(result?.Estimated), period, serviceNames
     };
   } catch (err) {
-    const errorText = getCommandErrorText(err);
-    if (isExpiredAwsSession(errorText)) {
-      return {
-        error: `AWS Session abgelaufen. Bitte neu anmelden: ${awsLoginCommand()}`,
-        period
-      };
-    }
-
-    return {
-      error: errorText.trim() || "AWS Billing konnte nicht gelesen werden.",
-      period
-    };
+    return { error: safeAwsError(err), period };
+  } finally {
+    client?.destroy?.();
+    auth?.clients.delete(client);
+    operation?.finish();
   }
 }
 
-export async function printBillingCost() {
-  const billing = await loadCurrentBedrockBillingCost();
+export async function printBillingCost(options) {
+  const billing = await loadCurrentBedrockBillingCost(options);
   console.log(`${ANSI.green}AWS Billing:${ANSI.reset} Bedrock, aktueller Monat`);
 
   if (billing.error) {
@@ -260,8 +212,8 @@ export function printUsageRecord(record) {
   console.log(`  Latenz: ${formatLatency(record.latencyMs)}`);
 }
 
-export async function printUsageSummary(usageTotals) {
-  await printBillingCost();
+export async function printUsageSummary(usageTotals, options) {
+  await printBillingCost(options);
   console.log("");
 
   if (!usageTotals.requests) {

@@ -28,6 +28,7 @@ export async function consumeConverseStream(stream, {
 
   try {
     for await (const event of stream) {
+      if (abortSignal?.aborted) { aborted = true; break; }
       if (event.type === "retry") {
         onRetry?.(event);
         continue;
@@ -57,5 +58,5 @@ export async function consumeConverseStream(stream, {
     }
   }
 
-  return { fullResponse, usageRecord, aborted, error };
+  return { fullResponse, usageRecord, aborted: aborted || Boolean(abortSignal?.aborted), error };
 }

@@ -15,7 +15,7 @@
      DOM-Parsing, daher darf app.js direkt auf die Elemente zugreifen. -->
 <script src="/vendor/marked.min.js" defer></script>
 <script src="/vendor/purify.min.js" defer></script>
-<script src="/app.js" defer></script>
+<script src="/app.js" type="module"></script>
 <style>
   :root {
     --bg: #262624;
@@ -322,9 +322,41 @@
   .modal-body td:last-child { text-align: right; color: var(--text); }
   .modal-body td:first-child { color: var(--text-dim); padding-right: 16px; }
   .modal-body .note { color: var(--text-dim); font-size: 12px; margin-top: 12px; }
+  #authDialog { color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 12px; width: min(520px, 92vw); max-height: 90vh; padding: 24px; }
+  #authDialog::backdrop { background: #0009; }
+  #authDialog h2 { margin-top: 0; }
+  #authDialog label { display: block; margin: 14px 0; }
+  #authDialog input, #authDialog select { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 9px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  #authDialog .auth-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  #authDialog [hidden] { display: none; }
+  #authDialog #authRevealField { display: flex; align-items: center; gap: 8px; }
+  #authDialog #authReveal { width: auto; margin: 0; }
+  #authDialog #authRevealField[hidden] { display: none; }
+  #authFeedback { white-space: pre-wrap; }
 </style>
 </head>
 <body>
+<dialog id="authDialog" aria-labelledby="authTitle">
+  <h2 id="authTitle">Einstellungen · AWS-Anmeldung</h2>
+  <p id="authStatus" role="status"></p>
+  <p>Der Tresor speichert einen AWS-Zugang verschlüsselt auf diesem Rechner. Nach 15 Minuten Inaktivität wird er gesperrt.</p>
+  <form id="authForm" autocomplete="off">
+    <label>Aktion<select id="authAction"></select></label>
+    <label id="authModeField" hidden>Anmeldeart<select id="authMode"><option value="vault">Verschlüsselter Tresor</option><option value="aws">AWS-Konfiguration des Rechners</option></select></label>
+    <label id="authProfileField" hidden>AWS-Profil<select id="authProfile"></select></label>
+    <p id="authProfileHint" hidden></p>
+    <label id="authAccessField" hidden>Access Key ID<input id="authAccess" type="password" autocomplete="off" maxlength="128" spellcheck="false"></label>
+    <label id="authSecretField" hidden>Secret Access Key<input id="authSecret" type="password" autocomplete="off" maxlength="40" spellcheck="false"></label>
+    <label id="authOldField" hidden>Bisheriges Masterpasswort<input id="authOld" type="password" autocomplete="off" maxlength="1024"></label>
+    <label id="authPasswordField" hidden><span id="authPasswordLabel">Masterpasswort</span><input id="authPassword" type="password" autocomplete="off" maxlength="1024"></label>
+    <label id="authConfirmField" hidden>Neues Masterpasswort wiederholen<input id="authConfirm" type="password" autocomplete="off" maxlength="1024"></label>
+    <label id="authRevealField" hidden><input id="authReveal" type="checkbox">Schlüssel und Passwörter anzeigen</label>
+    <label id="authDeleteField" hidden>Unwiderruflich löschen: TRESOR LOESCHEN eingeben<input id="authDelete" autocomplete="off" maxlength="32"></label>
+    <p id="authRecovery" hidden>Ohne Masterpasswort können die Schlüssel nicht wiederhergestellt werden. Zurücksetzen löscht den gespeicherten Zugang.</p>
+    <div class="auth-actions"><button type="submit" class="primary" id="authSubmit">Ausführen</button><button type="button" id="authCheck">AWS-Verbindung prüfen</button><button type="button" id="authLock">Jetzt sperren</button><button type="button" id="authClose">Schließen</button></div>
+  </form>
+  <p id="authFeedback" role="status" aria-live="polite"></p>
+</dialog>
 <header>
   <span class="logo">✳</span>
   <span class="title">Bedrock Chat</span>
@@ -332,6 +364,7 @@
   <select id="effortSelect" title="Effort Level (Denk-Aufwand)"></select>
   <span class="spacer"></span>
   <span class="chip" id="accountChip">–</span>
+  <button id="authBtn" title="AWS-Anmeldung und Tresor verwalten">Einstellungen</button>
   <button id="usageBtn" title="Kosten und Token-Nutzung anzeigen">Usage</button>
   <button id="systemBtn" title="System Prompt anzeigen/ändern">System</button>
   <button id="clearBtn" title="Verlauf leeren">Verlauf leeren</button>

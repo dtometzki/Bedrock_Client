@@ -1,3 +1,6 @@
+import { combineAbortSignals } from "./abort-signals.js";
+import { AuthError } from "./credential-vault.js";
+import { safeAwsError } from "./auth.js";
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
@@ -28,6 +31,7 @@ const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
 // damit gibt es keinerlei Pfad-Traversal-Flaeche.
 const STATIC_SCRIPTS = new Map([
   ["GET /app.js", new URL("./web/app.js", import.meta.url)],
+  ["GET /auth-form.js", new URL("./web/auth-form.js", import.meta.url)],
   ["GET /vendor/marked.min.js", new URL("./web/vendor/marked.min.js", import.meta.url)],
   ["GET /vendor/purify.min.js", new URL("./web/vendor/purify.min.js", import.meta.url)]
 ]);
@@ -221,29 +225,32 @@ export function isTokenValid(req, authToken) {
 export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let failed = false;
     const chunks = [];
-
+    const clear = () => { for (const chunk of chunks) chunk.fill(0); chunks.length = 0; };
     req.on("data", (chunk) => {
+      if (failed) return;
       size += chunk.length;
       if (size > limit) {
-        reject(new Error("Request Body zu gross."));
-        req.destroy();
+        failed = true;
+        clear();
+        // Drain without buffering so the caller can deliver a 4xx response.
+        reject(new AuthError("Request Body zu gross.", 413));
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
-      if (!chunks.length) {
-        resolve({});
-        return;
-      }
+      if (failed) return;
+      let body;
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        reject(new Error("Ungueltiges JSON im Request Body."));
-      }
+        body = Buffer.concat(chunks);
+        resolve(body.length ? JSON.parse(body.toString("utf8")) : {});
+      } catch { reject(new AuthError("Ungueltiges JSON im Request Body.")); }
+      finally { body?.fill(0); clear(); }
     });
-    req.on("error", reject);
+    req.on("aborted", () => { failed = true; clear(); reject(new AuthError("Anfrage abgebrochen.")); });
+    req.on("error", () => { failed = true; clear(); reject(new AuthError("Request konnte nicht gelesen werden.")); });
   });
 }
 
@@ -360,6 +367,7 @@ function toPublicUsageRecord(record) {
 
 export function createWebServer(options = {}) {
   const {
+    auth = null,
     models = [],
     model = null,
     client = null,
@@ -390,7 +398,13 @@ export function createWebServer(options = {}) {
   // modelId aufgeloest: die Umgebungsregion nutzt den uebergebenen Client, davon
   // abweichende ARN-Regionen bekommen einen eigenen, zwischengespeicherten Client.
   const regionalClients = new Map();
-  function resolveInvocationClient(modelId) {
+  async function resolveInvocationClient(modelId) {
+    if (auth) {
+      const config = await auth.clientConfig();
+      const targetRegion = regionForModelId(modelId, config.region);
+      if (!regionalClients.has(targetRegion)) regionalClients.set(targetRegion, auth.track(createClient({ ...config, region: targetRegion })));
+      return regionalClients.get(targetRegion);
+    }
     const targetRegion = regionForModelId(modelId, region);
     if (!targetRegion || targetRegion === region) {
       return client;
@@ -420,7 +434,9 @@ export function createWebServer(options = {}) {
   }
 
   function getStatePayload() {
+    const authState = auth?.status();
     return {
+      ...(authState && { auth: authState }),
       models: models.map((entry) => ({
         id: entry.id,
         label: entry.label,
@@ -429,9 +445,9 @@ export function createWebServer(options = {}) {
       modelId: state.model.id,
       modelLabel: state.model.label,
       effort: state.effort,
-      region,
-      identityLabel,
-      profile,
+      region: authState?.region ?? region,
+      identityLabel: authState?.identityLabel ?? identityLabel,
+      profile: authState?.profile ?? profile,
       systemPrompt: state.systemPrompt,
       maxTurns,
       busy: state.busy,
@@ -448,7 +464,13 @@ export function createWebServer(options = {}) {
   }
 
   async function handleUsage(res) {
-    const billing = await billingFn().catch((err) => ({ error: err.message }));
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.once("close", onClose);
+    let billing;
+    try { billing = await billingFn({ auth, abortSignal: controller.signal }).catch((err) => ({ error: safeAwsError(err) })); }
+    finally { res.off("close", onClose); }
+    if (res.destroyed) return;
     sendJson(res, 200, {
       billing,
       session: {
@@ -605,9 +627,12 @@ export function createWebServer(options = {}) {
     // eine zweite parallele Anfrage wuerde sonst den busy-Check ebenfalls
     // passieren und gleichzeitig streamen (Race auf state.messages/abortController).
     state.busy = true;
+    let authOperation;
 
     // Auch Validierung und Vorbereitung muessen busy bei jedem Fehler freigeben.
     try {
+      state.abortController = new AbortController();
+      authOperation = auth?.begin({ signal: state.abortController.signal });
       let body;
       try {
         body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
@@ -632,7 +657,11 @@ export function createWebServer(options = {}) {
         return;
       }
 
-      const abortController = new AbortController();
+      if (auth) auth.assertGeneration(authOperation.epoch);
+      const invocationClient = await resolveInvocationClient(getModelInvocationId(state.model));
+      if (auth) auth.assertGeneration(authOperation.epoch);
+      const abortController = state.abortController;
+      const abortSignal = authOperation ? combineAbortSignals([abortController.signal, authOperation.signal]) : abortController.signal;
       state.abortController = abortController;
 
       res.writeHead(200, {
@@ -667,7 +696,7 @@ export function createWebServer(options = {}) {
       const invocationModelId = getModelInvocationId(state.model);
 
       const { fullResponse, usageRecord, aborted, error } = await consumeConverseStream(
-        streamFn(resolveInvocationClient(invocationModelId), {
+        streamFn(invocationClient, {
           modelId: invocationModelId,
           messages: toBedrockMessages(requestMessages),
           system: state.systemPrompt || undefined,
@@ -675,19 +704,19 @@ export function createWebServer(options = {}) {
           additionalModelRequestFields: effortConfig
             ? buildAdaptiveThinkingFields(state.effort, effortConfig.style)
             : undefined,
-          abortSignal: abortController.signal
+          abortSignal
         }),
         {
           usageTotals: state.usageTotals,
           model: state.model,
-          abortSignal: abortController.signal,
+          abortSignal,
           onRetry: (event) => {
             send({
               type: "retry",
               attempt: event.attempt,
               maxRetries: event.maxRetries,
               delayMs: Math.round(event.delayMs),
-              message: formatBedrockErrorMessage(event.error)
+              message: auth?.mode === "vault" ? safeAwsError(event.error) : formatBedrockErrorMessage(event.error)
             });
           },
           onReasoning: (text) => {
@@ -700,7 +729,7 @@ export function createWebServer(options = {}) {
       );
       const failed = Boolean(error);
       if (failed) {
-        send({ type: "error", message: formatBedrockErrorMessage(error) });
+        send({ type: "error", message: auth?.mode === "vault" ? safeAwsError(error) : formatBedrockErrorMessage(error) });
       }
 
       let warning = "";
@@ -724,12 +753,60 @@ export function createWebServer(options = {}) {
         res.end();
       }
     } finally {
+      authOperation?.finish();
       state.busy = false;
       state.abortController = null;
     }
   }
 
+  const onAuthChange = () => {
+    state.abortController?.abort();
+    regionalClients.clear();
+  };
+  auth?.on("change", onAuthChange);
+
+  const authFields = {
+    setup: ["accessKeyId", "secretAccessKey", "profile", "password", "confirmation"],
+    unlock: ["password"], lock: [], update: ["accessKeyId", "secretAccessKey", "profile"],
+    password: ["oldPassword", "password", "confirmation"], delete: ["confirmation"],
+    mode: ["mode", "profile"], profile: ["profile"], check: [], activity: []
+  };
+  async function handleAuth(req, res, action) {
+    if (!auth) throw new AuthError("AWS-Einstellungen nicht verfuegbar.", 404);
+    res.setHeader("Cache-Control", "no-store");
+    if (action === "status") { sendJson(res, 200, auth.status()); return; }
+    if (action === "profiles") { sendJson(res, 200, await auth.profileOptions()); return; }
+    let body;
+    try { body = await readJsonBody(req, { limit: 8192 }); }
+    catch (err) { throw new AuthError("Ungueltige oder zu grosse AWS-Eingabe.", err.status || 400); }
+    const fields = authFields[action];
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.entries(body).some(([key, value]) => !fields.includes(key) || typeof value !== "string" || Buffer.byteLength(value) > 1024)) {
+      throw new AuthError("Ungueltige Felder in AWS-Einstellungen.");
+    }
+    // Reserve mutations against chat body preparation as well as AWS calls.
+    if (state.busy && !["lock", "activity"].includes(action)) throw new AuthError("Chat-Anfrage laeuft noch. Erst abbrechen.", 409);
+    try {
+      const data = () => ({ accessKeyId: body.accessKeyId, secretAccessKey: body.secretAccessKey, profile: body.profile });
+      if (action === "setup") await auth.setup(data(), body.password, body.confirmation);
+      else if (action === "unlock") await auth.unlock(body.password);
+      else if (action === "lock") auth.lock();
+      else if (action === "update") await auth.update(data());
+      else if (action === "password") await auth.changePassword(body.oldPassword, body.password, body.confirmation);
+      else if (action === "delete") await auth.remove(body.confirmation);
+      else if (action === "mode") await auth.selectMode(body.mode, body.profile);
+      else if (action === "profile") await auth.changeProfile(body.profile);
+      else if (action === "check") await auth.checkConnection();
+      else if (action === "activity") auth.touch();
+      sendJson(res, 200, auth.status());
+    } finally {
+      for (const key of Object.keys(body)) body[key] = "";
+    }
+  }
+
   const routes = new Map([
+    ...["status", "profiles"].map((action) => [`GET /api/auth/${action}`, (req, res) => handleAuth(req, res, action)]),
+    ...Object.keys(authFields).map((action) => [`POST /api/auth/${action}`, (req, res) => handleAuth(req, res, action)]),
     ["GET /", (_req, res) => handleIndex(res)],
     ...[...STATIC_SCRIPTS.keys()].map((route) => [
       route,
@@ -777,7 +854,7 @@ export function createWebServer(options = {}) {
 
     Promise.resolve().then(() => handler(req, res)).catch((err) => {
       if (!res.headersSent) {
-        sendJson(res, 500, { error: err.message });
+        sendJson(res, err instanceof AuthError ? err.status : 500, { error: pathname.startsWith("/api/auth/") ? safeAwsError(err) : err.message });
       } else {
         res.end();
       }
@@ -787,6 +864,7 @@ export function createWebServer(options = {}) {
   // Die zusaetzlich pro ARN-Region angelegten Clients gehoeren dem Server; der
   // uebergebene Basis-Client wird vom Aufrufer verwaltet und hier nicht zerstoert.
   server.on("close", () => {
+    auth?.off("change", onAuthChange);
     for (const regionalClient of regionalClients.values()) {
       regionalClient?.destroy?.();
     }

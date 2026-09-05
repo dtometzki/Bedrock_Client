@@ -85,6 +85,17 @@ function writeSettings(settings) {
   writeFileAtomic(getSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`);
 }
 
+export function readSavedAuthMode() {
+  const mode = readSettings().authMode;
+  return ["aws", "vault"].includes(mode) ? mode : null;
+}
+
+export function writeSavedAuthMode(authMode) {
+  const settings = readSettings();
+  settings.authMode = authMode;
+  writeSettings(settings);
+}
+
 export function normalizeInferenceOverrides(value) {
   const overrides = {};
 

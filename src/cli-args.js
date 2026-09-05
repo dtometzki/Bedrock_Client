@@ -13,6 +13,8 @@ export function getCliOptionHelp(defaultWebPort) {
     ["-m, --model <name>", "Modell beim Start setzen"],
     ["-p, --profile <name>", "AWS Profil beim Start setzen"],
     ["-p list", "AWS Profile anzeigen und beenden"],
+    ["--auth <aws|vault>", "AWS-Provider oder verschluesselten Tresor verwenden"],
+    ["--auth-setup", "AWS-Tresor vor dem Chatstart einrichten"],
     ["-r, --region <name>", "AWS Region ueberschreiben"],
     ["-s, --system <text>", "System Prompt setzen"],
     ["--system-file <pfad>", "System Prompt aus Datei laden"],
@@ -106,6 +108,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
         version: { type: "boolean", short: "v" },
         model: { type: "string", short: "m" },
         profile: { type: "string", short: "p" },
+        auth: { type: "string" },
+        "auth-setup": { type: "boolean" },
         region: { type: "string", short: "r" },
         system: { type: "string", short: "s" },
         "system-file": { type: "string" },
@@ -127,6 +131,9 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
   }
 
   const values = parsed.values;
+  if (values.auth !== undefined && !["aws", "vault"].includes(values.auth)) {
+    throw new Error("--auth muss aws oder vault sein.");
+  }
   const maxTokens = parseNumberOption("max-tokens", values["max-tokens"], {
     min: 1,
     integer: true
@@ -161,6 +168,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     version: Boolean(values.version),
     model: values.model ?? null,
     profile: values.profile ?? null,
+    auth: values.auth ?? null,
+    authSetup: Boolean(values["auth-setup"]),
     region: values.region ?? null,
     system: resolveSystemPrompt(values),
     maxTokens,

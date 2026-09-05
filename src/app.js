@@ -1,3 +1,6 @@
+import { combineAbortSignals } from "./abort-signals.js";
+import { AuthService, safeAwsError } from "./auth.js";
+import { manageAuth } from "./auth-prompt.js";
 import {
   ANSI,
   formatAccountSummary,
@@ -23,11 +26,7 @@ import { clearSession, readSession, writeSession } from "./session.js";
 import { appendAssistantResponse, countHistoryTurns, formatHistoryLimit, trimMessagesToMaxTurns } from "./history.js";
 import { findModel, getModelInvocationId, loadModels, normalizeEffort, resolveEffortLevel, resolveModelsPath, resolveStartupModel } from "./models.js";
 import {
-  formatProfileList,
-  listAwsProfiles,
-  loadAwsContext,
   printAwsProfiles,
-  switchAwsProfile
 } from "./aws-context.js";
 import {
   accountMismatchFromError,
@@ -206,7 +205,7 @@ async function cmdDebug(input, ctx) {
 }
 
 async function cmdUsage(_input, ctx) {
-  await printUsageSummary(ctx.usageTotals);
+  await printUsageSummary(ctx.usageTotals, { auth: ctx.auth });
   return { signal: "handled" };
 }
 
@@ -237,9 +236,9 @@ async function cmdHistory(_input, ctx) {
 
 async function cmdAccount(_input, ctx) {
   console.log(formatAccountSummary({
-    profile: process.env.AWS_PROFILE || "default",
+    profile: ctx.auth.profile,
     region: ctx.region,
-    identityLabel: ctx.identityLabel
+    identityLabel: ctx.auth.identityLabel
   }).join("\n"));
   console.log(terminalLine());
   return { signal: "handled" };
@@ -248,36 +247,24 @@ async function cmdAccount(_input, ctx) {
 async function cmdProfile(input, ctx) {
   const requestedProfile = commandArg(input, "/profile");
   if (!requestedProfile) {
-    console.log(`${ANSI.green}AWS Profile:${ANSI.reset} ${formatProfileList(listAwsProfiles())}`);
-    console.log(`${ANSI.green}Aktiv:${ANSI.reset} ${ctx.identityLabel || process.env.AWS_PROFILE || "default"}`);
+    console.log(`${ANSI.green}AWS Profile:${ANSI.reset} ${(await ctx.auth.listProfiles()).map(sanitizeTerminalText).join(", ")}`);
+    console.log(`${ANSI.green}Aktiv:${ANSI.reset} ${sanitizeTerminalText(ctx.auth.status().profile || "Tresor gesperrt")}`);
     console.log(terminalLine());
     return { signal: "handled" };
   }
 
   try {
-    const nextContext = switchAwsProfile(requestedProfile);
-    ctx.region = nextContext.region;
-    ctx.identityLabel = nextContext.identityLabel;
-    // Alten Client schliessen, sonst bleiben dessen offene Sockets bei jedem
-    // Profilwechsel liegen. Auch die pro ARN-Region angelegten Clients werden
-    // verworfen, damit keine mit den alten Credentials erzeugten Clients
-    // weiterlaufen.
-    ctx.bedrockClient?.destroy?.();
-    destroyRegionalBedrockClients(ctx);
-    ctx.bedrockClient = createBedrockClient({ region: ctx.region });
-    ctx.messages = [];
-    const sessionCleared = clearSessionIfEnabled(ctx);
-    console.log(`${ANSI.green}AWS Profil:${ANSI.reset} ${nextContext.profile}`);
-    if (ctx.identityLabel) {
-      console.log(`${ANSI.green}Identitaet:${ANSI.reset} ${ctx.identityLabel}`);
-    }
-    console.log(`${ANSI.green}Region:${ANSI.reset} ${ctx.region}`);
-    console.log(`${ANSI.gray}${sessionCleared ? "Verlauf geleert." : "Nur der Verlauf im Arbeitsspeicher wurde geleert; die gespeicherte Sitzung bleibt erhalten."}${ANSI.reset}`);
-    console.log(terminalLine());
-  } catch (err) {
-    console.error(`${ANSI.yellow}${err.message}${ANSI.reset}`);
-    console.log(terminalLine());
-  }
+    await ctx.auth.changeProfile(requestedProfile);
+    ctx.region = ctx.auth.region;
+    console.log(`AWS Profil: ${sanitizeTerminalText(requestedProfile)}. Verbindung mit /auth check pruefen.`);
+  } catch (err) { console.error(sanitizeTerminalText(err.message)); }
+
+  return { signal: "handled" };
+}
+
+async function cmdAuth(input, ctx) {
+  try { await manageAuth(ctx.auth, commandArg(input, "/auth") || "status"); }
+  catch (err) { console.error(sanitizeTerminalText(err.message)); }
   return { signal: "handled" };
 }
 
@@ -347,6 +334,7 @@ const COMMAND_DISPATCH = [
   { match: (i) => i === "/history", handle: cmdHistory },
   { match: (i) => i === "/account", handle: cmdAccount },
   { match: (i) => matchesCommand(i, "/profile"), handle: cmdProfile },
+  { match: (i) => matchesCommand(i, "/auth"), handle: cmdAuth },
   { match: (i) => matchesCommand(i, "/model"), handle: cmdModel },
   { match: (i) => i === "/retry", handle: cmdRetry }
 ];
@@ -409,14 +397,17 @@ function rememberPrompt(ctx, input) {
 // identifier is invalid." fuehren. Fuer die Umgebungsregion wird der bestehende
 // Client wiederverwendet, abweichende ARN-Regionen bekommen einen eigenen,
 // zwischengespeicherten Client.
-function resolveBedrockClient(ctx, region) {
+async function resolveBedrockClient(ctx, region) {
+  const config = await ctx.auth.clientConfig();
+  ctx.region = config.region;
   if (!region || region === ctx.region) {
+    ctx.bedrockClient ??= ctx.auth.track(createBedrockClient(config));
     return ctx.bedrockClient;
   }
   ctx.regionalBedrockClients ??= new Map();
   let client = ctx.regionalBedrockClients.get(region);
   if (!client) {
-    client = createBedrockClient({ region });
+    client = ctx.auth.track(createBedrockClient({ ...config, region }));
     ctx.regionalBedrockClients.set(region, client);
   }
   return client;
@@ -434,7 +425,7 @@ function destroyRegionalBedrockClients(ctx) {
 }
 
 // Sendet einen Prompt an das Modell, streamt die Antwort und aktualisiert ctx.
-async function streamModelResponse(ctx, promptText) {
+async function streamModelResponse(ctx, promptText, operation) {
   ctx.lastPrompt = promptText;
   const userMessage = { role: "user", content: [{ text: promptText }] };
   const requestMessages = [...ctx.messages, userMessage];
@@ -442,162 +433,179 @@ async function streamModelResponse(ctx, promptText) {
 
   const bedrockModelId = getModelInvocationId(ctx.currentModel);
   const requestRegion = regionForModelId(bedrockModelId, ctx.region);
-  const bedrockClient = resolveBedrockClient(ctx, requestRegion);
+  const bedrockClient = await resolveBedrockClient(ctx, requestRegion);
   const effortConfig = normalizeEffort(ctx.currentModel);
   const additionalModelRequestFields = effortConfig
     ? buildAdaptiveThinkingFields(ctx.effort, effortConfig.style)
     : undefined;
   const interrupter = createStreamInterruptController();
+  const abortSignal = combineAbortSignals([interrupter.signal, operation.signal]);
+  interrupter.signal.addEventListener("abort", operation.cancel, { once: true });
 
-  let lineBuffer = "";
-  let reasoningOpen = false;
+  try {
+    let lineBuffer = "";
+    let reasoningOpen = false;
 
-  const flushLineBuffer = () => {
-    if (lineBuffer) {
-      const formatted = formatLine(lineBuffer);
-      if (formatted !== null) {
-        console.log(formatted);
+    const flushLineBuffer = () => {
+      if (lineBuffer) {
+        const formatted = formatLine(lineBuffer);
+        if (formatted !== null) {
+          console.log(formatted);
+        }
+        lineBuffer = "";
       }
-      lineBuffer = "";
-    }
-  };
+    };
 
-  if (ctx.debugMode) {
-    printDebugLines("Debug Request", formatDebugRequestLines({
-      model: ctx.currentModel,
-      modelId: bedrockModelId,
-      region: requestRegion,
-      profile: process.env.AWS_PROFILE || "default",
-      inferenceConfig: ctx.inferenceConfig,
-      effort: ctx.effort,
-      additionalModelRequestFields,
-      historyMessages: ctx.messages,
-      requestMessages,
-      system: ctx.systemPrompt,
-      maxTurns: ctx.maxTurns
-    }));
-  }
-
-  resetResponseFormatting();
-
-  const { fullResponse, usageRecord, aborted, error: requestError } = await consumeConverseStream(
-    streamConverseWithRetry(bedrockClient, {
-      modelId: bedrockModelId,
-      messages: requestMessages,
-      system: ctx.systemPrompt,
-      inferenceConfig: ctx.inferenceConfig,
-      additionalModelRequestFields,
-      abortSignal: interrupter.signal
-    }),
-    {
-      usageTotals: ctx.usageTotals,
-      model: ctx.currentModel,
-      abortSignal: interrupter.signal,
-      onRetry: (event) => {
-        console.error(`${ANSI.gray}Erneuter Versuch ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)} ms (${formatBedrockErrorMessage(event.error)})${ANSI.reset}`);
-      },
-      onReasoning: (text) => {
-        if (!reasoningOpen) {
-          process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
-          reasoningOpen = true;
-        }
-        process.stdout.write(sanitizeTerminalText(text));
-      },
-      onText: (text) => {
-        if (reasoningOpen) {
-          process.stdout.write(`${ANSI.reset}\n\n`);
-          reasoningOpen = false;
-        }
-        lineBuffer += sanitizeTerminalText(text);
-
-        if (lineBuffer.includes("\n")) {
-          const lines = lineBuffer.split("\n");
-          for (let i = 0; i < lines.length - 1; i++) {
-            const formatted = formatLine(lines[i]);
-            if (formatted !== null) {
-              console.log(formatted);
-            }
-          }
-          lineBuffer = lines[lines.length - 1];
-        }
-      }
-    }
-  );
-
-  // Offenen Reasoning-Block auch bei Fehler/Abbruch sauber schliessen.
-  if (reasoningOpen) {
-    process.stdout.write(`${ANSI.reset}\n`);
-    reasoningOpen = false;
-  }
-  interrupter.dispose();
-
-  // Bereits gepufferte Teil-Zeile in jedem Fall ausgeben (auch bei Fehler/Abbruch).
-  flushLineBuffer();
-
-  if (requestError) {
-    console.error(`\n${ANSI.yellow}API Fehler: ${formatBedrockErrorMessage(requestError)}${ANSI.reset}`);
     if (ctx.debugMode) {
-      printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
+      printDebugLines("Debug Request", formatDebugRequestLines({
         model: ctx.currentModel,
         modelId: bedrockModelId,
         region: requestRegion,
-        inferenceConfig: ctx.inferenceConfig
-      }));
-    } else {
-      console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
-    }
-    const accountMismatch = accountMismatchFromError(requestError);
-    if (accountMismatch) {
-      console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Das Inference Profile gehoert zu AWS-Konto ${accountMismatch.resourceAccount}, deine Identität nutzt aber Konto ${accountMismatch.callerAccount}. Setze profileArn auf dein eigenes Konto oder nutze die reine Inference-Profile-ID (z. B. ${ctx.currentModel.id}).`);
-    } else if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
-      console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
-    }
-  } else {
-    if (aborted) {
-      console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
-    }
-
-    // Der Verlauf speichert den sanitizierten Text (keine Terminal-Steuersequenzen).
-    const responseText = sanitizeTerminalText(fullResponse);
-    if (responseText) {
-      ctx.messages = appendAssistantResponse(requestMessages, responseText, {
-        aborted,
+        profile: ctx.auth.profile,
+        inferenceConfig: ctx.inferenceConfig,
+        effort: ctx.effort,
+        additionalModelRequestFields,
+        historyMessages: ctx.messages,
+        requestMessages,
+        system: ctx.systemPrompt,
         maxTurns: ctx.maxTurns
-      });
-      persistSession(ctx);
+      }));
     }
 
-    if (usageRecord) {
-      console.log("");
-      console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
+    resetResponseFormatting();
+
+    const { fullResponse, usageRecord, aborted, error: requestError } = await consumeConverseStream(
+      streamConverseWithRetry(bedrockClient, {
+        modelId: bedrockModelId,
+        messages: requestMessages,
+        system: ctx.systemPrompt,
+        inferenceConfig: ctx.inferenceConfig,
+        additionalModelRequestFields,
+        abortSignal
+      }),
+      {
+        usageTotals: ctx.usageTotals,
+        model: ctx.currentModel,
+        abortSignal,
+        onRetry: (event) => {
+          console.error(`${ANSI.gray}Erneuter Versuch ${event.attempt}/${event.maxRetries} in ${Math.round(event.delayMs)} ms (${ctx.auth.mode === "vault" ? safeAwsError(event.error) : formatBedrockErrorMessage(event.error)})${ANSI.reset}`);
+        },
+        onReasoning: (text) => {
+          if (!reasoningOpen) {
+            process.stdout.write(`${ANSI.gray}[Reasoning]\n`);
+            reasoningOpen = true;
+          }
+          process.stdout.write(sanitizeTerminalText(text));
+        },
+        onText: (text) => {
+          if (reasoningOpen) {
+            process.stdout.write(`${ANSI.reset}\n\n`);
+            reasoningOpen = false;
+          }
+          lineBuffer += sanitizeTerminalText(text);
+
+          if (lineBuffer.includes("\n")) {
+            const lines = lineBuffer.split("\n");
+            for (let i = 0; i < lines.length - 1; i++) {
+              const formatted = formatLine(lines[i]);
+              if (formatted !== null) {
+                console.log(formatted);
+              }
+            }
+            lineBuffer = lines[lines.length - 1];
+          }
+        }
+      }
+    );
+
+    // Offenen Reasoning-Block auch bei Fehler/Abbruch sauber schliessen.
+    if (reasoningOpen) {
+      process.stdout.write(`${ANSI.reset}\n`);
+      reasoningOpen = false;
     }
+
+    // Bereits gepufferte Teil-Zeile in jedem Fall ausgeben (auch bei Fehler/Abbruch).
+    flushLineBuffer();
+
+    if (requestError) {
+      console.error(`\n${ANSI.yellow}API Fehler: ${ctx.auth.mode === "vault" ? safeAwsError(requestError) : formatBedrockErrorMessage(requestError)}${ANSI.reset}`);
+      if (ctx.debugMode && ctx.auth.mode !== "vault") {
+        printDebugLines("Debug Fehler", formatBedrockErrorDiagnostics(requestError, {
+          model: ctx.currentModel,
+          modelId: bedrockModelId,
+          region: requestRegion,
+          inferenceConfig: ctx.inferenceConfig
+        }));
+      } else {
+        console.error(`${ANSI.gray}Debug: /debug einschalten oder mit --debug starten fuer Details.${ANSI.reset}`);
+      }
+      const accountMismatch = accountMismatchFromError(requestError);
+      if (accountMismatch) {
+        console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Das Inference Profile gehoert zu AWS-Konto ${accountMismatch.resourceAccount}, deine Identität nutzt aber Konto ${accountMismatch.callerAccount}. Setze profileArn auf dein eigenes Konto oder nutze die reine Inference-Profile-ID (z. B. ${ctx.currentModel.id}).`);
+      } else if ((requestError.message || "").includes("bedrock:InvokeModelWithResponseStream")) {
+        console.error(`${ANSI.yellow}Hinweis:${ANSI.reset} Die aktive AWS-Identität braucht bedrock:InvokeModelWithResponseStream für das gewählte Modell bzw. Inference Profile.`);
+      }
+    } else {
+      if (aborted) {
+        console.log(`\n${ANSI.gray}Antwort abgebrochen.${ANSI.reset}`);
+      }
+
+      // Der Verlauf speichert den sanitizierten Text (keine Terminal-Steuersequenzen).
+      const responseText = sanitizeTerminalText(fullResponse);
+      if (responseText) {
+        ctx.messages = appendAssistantResponse(requestMessages, responseText, {
+          aborted,
+          maxTurns: ctx.maxTurns
+        });
+        persistSession(ctx);
+      }
+
+      if (usageRecord) {
+        console.log("");
+        console.log(`${ANSI.gray}${formatInteger(usageRecord.totalTokens)} Tokens, Session-Schaetzung ${formatUsd(usageRecord.costUsd)}${ANSI.reset}`);
+      }
+    }
+
+    process.stdout.write(ANSI.reset);
+    console.log("");
+  } finally {
+    interrupter.signal.removeEventListener("abort", operation.cancel);
+    interrupter.dispose();
   }
-
-  process.stdout.write(ANSI.reset);
-  console.log("");
 }
 
 // Liest Prompts, verarbeitet Slash-Befehle und streamt Modellantworten bis zum Ende.
 async function runChatLoop(ctx) {
   while (true) {
-    const prompt = await readPrompt({ history: ctx.promptHistory });
+    const prompt = await readPrompt({ history: ctx.promptHistory, onActivity: () => ctx.auth.touch() });
     if (prompt === null) break;
     const input = prompt.trim();
 
     if (!input) continue;
-    rememberPrompt(ctx, input);
+    ctx.auth.touch();
+    if (!input.startsWith("/auth")) rememberPrompt(ctx, input);
 
     const result = await handleCommand(input, ctx);
     if (result.signal === "break") break;
     if (result.signal === "handled") continue;
 
-    await streamModelResponse(ctx, result.promptText);
+    let operation;
+    try {
+      if (ctx.auth.mode === "vault" && ctx.auth.status().locked) await manageAuth(ctx.auth, "unlock");
+      operation = ctx.auth.begin();
+      await ctx.auth.clientConfig();
+      ctx.region = ctx.auth.region;
+      await streamModelResponse(ctx, result.promptText, operation);
+    } catch (err) { console.error(sanitizeTerminalText(err.message)); }
+    finally { operation?.finish(); }
   }
 
   console.log(`\n${ANSI.gray}Chat beendet.${ANSI.reset}`);
 }
 
 export async function main() {
+  let auth;
+  let webStarted = false;
   try {
     const cliArgs = parseCliArgs();
 
@@ -617,8 +625,15 @@ export async function main() {
     }
 
     if (cliArgs.profile === "-list" || cliArgs.profile === "--list" || cliArgs.profile === "list") {
-      printAwsProfiles();
+      await printAwsProfiles();
       return;
+    }
+
+    auth = new AuthService({ mode: cliArgs.authSetup ? "vault" : cliArgs.auth, profile: cliArgs.profile, region: cliArgs.region });
+    if (cliArgs.authSetup && !cliArgs.web) await manageAuth(auth, "setup");
+    if (!cliArgs.web && auth.mode === "vault" && auth.status().exists && auth.status().locked) {
+      try { await manageAuth(auth, "unlock"); }
+      catch (err) { console.error(sanitizeTerminalText(err.message)); }
     }
 
     const legacyLastModelPath = new URL("../.last_model", import.meta.url);
@@ -665,18 +680,15 @@ export async function main() {
       );
     }
     const inferenceConfig = buildInferenceConfig(currentModel, activeInferenceOverrides);
-    if (cliArgs.region) {
-      // Ueberschreibt die Region der Default-Aufloesung (Env, Profil-Konfiguration).
-      // Gilt auch nach /profile-Wechseln, da resolveAwsRegion AWS_REGION bevorzugt.
-      process.env.AWS_REGION = cliArgs.region;
-    }
-    const startupContext = cliArgs.profile ? switchAwsProfile(cliArgs.profile) : loadAwsContext();
+    // The GUI and /auth remain accessible with missing, expired or locked credentials.
+    const startupContext = auth.status();
 
     const autoSaveEnabled = !cliArgs.noSave;
 
     // Gebuendelter, veraenderlicher Zustand der Chat-Sitzung.
     const ctx = {
       models,
+      auth,
       activeInferenceOverrides,
       autoSaveEnabled,
       usageTotals: emptyUsageTotals(),
@@ -695,10 +707,16 @@ export async function main() {
       inferenceConfig,
       region: startupContext.region,
       identityLabel: startupContext.identityLabel,
-      bedrockClient: createBedrockClient({ region: startupContext.region })
+      bedrockClient: null
     };
 
+    auth.on("change", () => {
+      ctx.bedrockClient = null;
+      ctx.regionalBedrockClients?.clear();
+      ctx.identityLabel = "";
+    });
     process.on("SIGTERM", () => {
+      auth.close();
       ctx.bedrockClient?.destroy?.();
       destroyRegionalBedrockClients(ctx);
       process.exit(0);
@@ -726,19 +744,22 @@ export async function main() {
     if (cliArgs.web) {
       const { server, url, authToken } = await startWebServer({
         models,
+        auth,
         model: ctx.currentModel,
         client: ctx.bedrockClient,
         inferenceOverrides: activeInferenceOverrides,
         systemPrompt: ctx.systemPrompt,
         region: ctx.region,
-        identityLabel: ctx.identityLabel,
-        profile: process.env.AWS_PROFILE || "default",
+        identityLabel: ctx.auth.identityLabel,
+        profile: ctx.auth.profile,
         maxTurns: cliArgs.maxTurns,
         autoSave: autoSaveEnabled,
         messages: ctx.messages,
         effort: ctx.effort,
         port: cliArgs.port ?? DEFAULT_WEB_PORT
       });
+      webStarted = true;
+      server.once("close", () => auth.close());
       let bootstrap = null;
       try {
         bootstrap = authToken ? createBrowserBootstrap(url, authToken) : null;
@@ -774,5 +795,7 @@ export async function main() {
   } catch (err) {
     console.error(`\nFehler: ${err.message}`);
     process.exitCode = 1;
+  } finally {
+    if (!webStarted) auth?.close();
   }
 }

@@ -1,6 +1,7 @@
 import { ANSI, terminalLine } from "./ui.js";
 
 export const SLASH_COMMANDS = [
+  { name: "/auth", description: "AWS-Anmeldung und verschluesselten Tresor verwalten" },
   { name: "/", description: "Befehlsliste anzeigen" },
   { name: "/help", description: "Befehlsliste anzeigen" },
   { name: "/account", description: "AWS Account und Region anzeigen" },

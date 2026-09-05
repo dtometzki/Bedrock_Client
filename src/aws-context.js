@@ -1,188 +1,42 @@
-import { execFileSync } from "node:child_process";
+import { parseKnownFiles } from "@smithy/shared-ini-file-loader";
+import { sanitizeTerminalText } from "./response-format.js";
 
-// Alle nicht-interaktiven aws-CLI-Aufrufe laufen synchron und blockieren damit
-// den Start. Ohne Timeout haengt bedrock-chat unbegrenzt, wenn der SSO-Flow
-// oder ein Proxy nicht antwortet. Das interaktive `aws login` ist bewusst
-// ausgenommen – dort wartet die CLI legitim auf den Nutzer im Browser.
-const AWS_CLI_TIMEOUT_MS = 15_000;
-
-function runAwsCli(args) {
-  return execFileSync("aws", args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: AWS_CLI_TIMEOUT_MS
-  });
+export async function readAwsProfiles(options = {}) {
+  return parseKnownFiles({ ...options, ignoreCache: true });
 }
 
 export function getActiveAwsProfile() {
   return process.env.AWS_PROFILE || "default";
 }
 
-export function getCommandErrorText(err) {
-  return [err?.stdout, err?.stderr, err?.message]
-    .filter(Boolean)
-    .map((value) => Buffer.isBuffer(value) ? value.toString("utf8") : String(value))
-    .join("\n");
-}
-
-export function isExpiredAwsSession(errorText) {
-  return /session has expired|reauthenticate|token has expired|sso.*expired/i.test(errorText);
-}
-
-export function getAwsConfigValue(key, profile = null) {
-  try {
-    const args = ["configure", "get", key];
-    if (profile) {
-      args.push("--profile", profile);
-    }
-    return runAwsCli(args).trim();
-  } catch {
-    return "";
-  }
-}
-
-export function awsLoginArgs() {
-  const profile = getActiveAwsProfile();
-  const loginProfile = getAwsConfigValue("source_profile", profile) || profile;
-  return loginProfile === "default" ? ["login"] : ["login", "--profile", loginProfile];
-}
-
-export function awsLoginCommand() {
-  return ["aws", ...awsLoginArgs()].join(" ");
-}
-
-// Startet das AWS-Login interaktiv (Browser-Flow). Gibt true zurueck, wenn
-// das Login erfolgreich durchlief.
-export function runAwsLogin() {
-  try {
-    console.log(`AWS Session abgelaufen – starte ${awsLoginCommand()} ...`);
-    execFileSync("aws", awsLoginArgs(), { stdio: "inherit" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function formatAwsIdentity(identity) {
   if (!identity) return "";
 
   const account = identity.Account ? `, ${identity.Account}` : "";
-  const arn = identity.Arn || "";
+  const arn = typeof identity.Arn === "string" ? identity.Arn : "";
   const assumedRoleMatch = arn.match(/:assumed-role\/([^/]+)\/(.+)$/);
   const userMatch = arn.match(/:user\/(.+)$/);
 
   if (assumedRoleMatch) {
     const [, role, sessionName] = assumedRoleMatch;
-    return `${sessionName} (${role}${account})`;
+    return sanitizeTerminalText(`${sessionName} (${role}${account})`);
   }
   if (userMatch) {
-    return `${userMatch[1]} (IAM${account})`;
+    return sanitizeTerminalText(`${userMatch[1]} (IAM${account})`);
   }
   if (arn.endsWith(":root")) {
-    return `root (${identity.Account})`;
+    return sanitizeTerminalText(`root (${identity.Account})`);
   }
 
-  return identity.UserId ? `${identity.UserId}${account}` : "";
+  return identity.UserId ? sanitizeTerminalText(`${identity.UserId}${account}`) : "";
 }
 
-export function isMissingAwsCredentials(errorText) {
-  return /unable to locate credentials|could not be found|no credentials|credentials not found/i.test(errorText);
-}
 
-export function resolveAwsRegion() {
-  return process.env.AWS_REGION ||
-    process.env.AWS_DEFAULT_REGION ||
-    getAwsConfigValue("region") ||
-    "us-east-1";
-}
-
-function fetchAwsIdentity() {
-  const identityJson = runAwsCli(["sts", "get-caller-identity", "--output", "json"]);
-  return formatAwsIdentity(JSON.parse(identityJson));
-}
-
-export function loadAwsIdentity({ autoLogin = true } = {}) {
-  try {
-    return fetchAwsIdentity();
-  } catch (err) {
-    const errorText = getCommandErrorText(err);
-    if (isExpiredAwsSession(errorText)) {
-      if (autoLogin && runAwsLogin()) {
-        try {
-          return fetchAwsIdentity();
-        } catch {
-          // Login lief durch, Identity trotzdem nicht lesbar -> manueller Hinweis
-        }
-      }
-      throw new Error(`AWS Session abgelaufen. Bitte neu anmelden:\n\n  ${awsLoginCommand()}`);
-    }
-    if (isMissingAwsCredentials(errorText)) {
-      throw new Error(`AWS Credentials nicht gefunden. Bitte anmelden oder konfigurieren:\n\n  ${awsLoginCommand()}\n  aws configure`);
-    }
-    return "";
-  }
-}
-
-// Der Bedrock-Client nutzt die Default Credential Provider Chain des AWS SDK
-// (Umgebungsvariablen, SSO, geteilte Profildateien, Assume-Role). Das SDK
-// aktualisiert dabei ablaufende SSO-/Rollen-Sessions selbstständig, statt dass
-// der Client statisch extrahierte Schlüssel für die gesamte Laufzeit hält.
-export function loadAwsContext() {
-  const identityLabel = loadAwsIdentity();
-  return {
-    region: resolveAwsRegion(),
-    identityLabel,
-    profile: getActiveAwsProfile()
-  };
-}
-
-export function listAwsProfiles() {
-  try {
-    return runAwsCli(["configure", "list-profiles"])
-      .split("\n")
-      .map((profile) => profile.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-export function formatProfileList(profiles) {
+export function formatProfileList(profiles, activeProfile = getActiveAwsProfile()) {
   if (!profiles.length) return "Keine AWS-Profile gefunden.";
-  const activeProfile = getActiveAwsProfile();
-  return profiles
-    .map((profile) => profile === activeProfile ? `${profile} (aktiv)` : profile)
-    .join(", ");
+  return profiles.map((profile) => sanitizeTerminalText(profile === activeProfile ? `${profile} (aktiv)` : profile)).join(", ");
 }
 
-export function printAwsProfiles() {
-  console.log(formatProfileList(listAwsProfiles()));
-}
-
-export function switchAwsProfile(profile, {
-  listProfiles = listAwsProfiles,
-  loadContext = loadAwsContext
-} = {}) {
-  const profiles = listProfiles();
-  if (profiles.length && !profiles.includes(profile)) {
-    throw new Error(`AWS Profil nicht gefunden: ${profile}\nVerfuegbar: ${profiles.join(", ")}`);
-  }
-
-  const previousProfile = process.env.AWS_PROFILE;
-  if (profile === "default") {
-    delete process.env.AWS_PROFILE;
-  } else {
-    process.env.AWS_PROFILE = profile;
-  }
-
-  try {
-    return loadContext();
-  } catch (err) {
-    if (previousProfile == null) {
-      delete process.env.AWS_PROFILE;
-    } else {
-      process.env.AWS_PROFILE = previousProfile;
-    }
-    throw err;
-  }
+export async function printAwsProfiles() {
+  console.log(formatProfileList(Object.keys(await readAwsProfiles()).sort()));
 }
