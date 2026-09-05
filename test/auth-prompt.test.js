@@ -49,6 +49,39 @@ test("auth management only accepts command names, never password arguments", asy
   await assert.rejects(manageAuth({}, "unlock private-test-passphrase"), /Unbekannter/);
 });
 
+test("successful setup and unlock omit automatic status and command help", async (t) => {
+  const output = [];
+  t.mock.method(console, "log", (line) => output.push(line));
+  let unlocked = false;
+  let configured = false;
+  const auth = {
+    listProfiles: async () => ["test-role"],
+    setup: async () => { configured = true; },
+    unlock: async () => { unlocked = true; },
+    status: () => ({ mode: "vault", exists: true, locked: false, connection: "unchecked" })
+  };
+  await manageAuth(auth, "setup", async () => "test-only-input");
+  assert.equal(configured, true);
+  assert.deepEqual(output, ["AWS-Profile: test-role"]);
+  output.length = 0;
+  await manageAuth(auth, "unlock", async () => "test-only-passphrase");
+  assert.equal(unlocked, true);
+  assert.deepEqual(output, []);
+  await manageAuth(auth);
+  assert.equal(output.length, 2);
+  assert.match(output[0], /^AWS-Anmeldung:/);
+  assert.match(output[1], /^\/auth setup \| unlock/);
+});
+
+test("failed unlock still reports errors and the next login succeeds quietly", async (t) => {
+  const output = [];
+  t.mock.method(console, "log", (line) => output.push(line));
+  const auth = { unlock: async (password) => { if (password !== "valid-test-passphrase") throw new Error("Falsches Masterpasswort"); } };
+  await assert.rejects(manageAuth(auth, "unlock", async () => "wrong"), /Falsches Masterpasswort/);
+  await manageAuth(auth, "unlock", async () => "valid-test-passphrase");
+  assert.deepEqual(output, []);
+});
+
 test("secret prompts preserve Unicode across split terminal data chunks", async () => {
   const term = terminal();
   const pending = readSecret("Password:", term);
