@@ -178,3 +178,33 @@ test("foreground and tokenless servers cannot be stopped through the background 
   const unprotected = await fixture(t, { serverOptions: { authToken: null, prepareShutdown: () => assert.fail("must require a configured token") } });
   assert.equal((await unprotected.request("/api/server/stop", {})).status, 404);
 });
+
+test("connection diagnostics are safe across tabs, distinguish identity failures and clear on retry or lock", async (t) => {
+  let fail = true;
+  const { request } = await fixture(t, { authOptions: { identityClient: () => ({
+    send: async () => {
+      if (fail) throw Object.assign(new Error(DATA.secretAccessKey), { name: "AccessDenied", $metadata: { httpStatusCode: 403, requestId: DATA.accessKeyId } });
+      return { Account: "123456789012", Arn: "arn:aws:sts::123456789012:assumed-role/Test/local-test" };
+    }, destroy() {}
+  }) } });
+  await request("/api/auth/setup", { ...DATA, password: PASSWORD, confirmation: PASSWORD });
+  const failed = await request("/api/auth/check", {});
+  assert.equal(failed.status, 502);
+  assert.match(failed.data.details.step, /GetCallerIdentity/);
+  assert.equal(failed.data.details.roleArn, undefined);
+  assert.equal(failed.data.details.requestId, undefined);
+  assert.equal(failed.data.details.httpStatus, 403);
+  assert.deepEqual((await request("/api/auth/status")).data.connectionError, failed.data.details);
+  assert.deepEqual((await request("/api/state")).data.auth.connectionError, failed.data.details);
+  fail = false;
+  const success = await request("/api/auth/check", {});
+  assert.equal(success.status, 200);
+  assert.equal(success.data.connectionError, null);
+  assert.equal(success.data.roleName, "Test");
+  fail = true;
+  await request("/api/auth/check", {});
+  await request("/api/auth/lock", {});
+  assert.equal((await request("/api/auth/status")).data.connectionError, null);
+  assert.equal((await request("/api/auth/check", {})).status, 423);
+  assert.equal((await request("/api/auth/unlock", { password: PASSWORD })).status, 200);
+});

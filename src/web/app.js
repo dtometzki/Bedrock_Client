@@ -1,4 +1,5 @@
 import { initAuthForm } from "./auth-form.js";
+import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./auth-display.js";
 
 (() => {
   "use strict";
@@ -637,21 +638,21 @@ import { initAuthForm } from "./auth-form.js";
       const option = document.createElement("option");
       option.value = profile;
       option.disabled = !allowed.includes(profile);
-      option.textContent = profile + (option.disabled ? " — AWS-Konfiguration" : "");
+      option.textContent = profile + (option.disabled ? " — bestehende AWS-Anmeldung" : "");
       return option;
     }));
     authEl("authProfile").value = [previous, authState?.profile, ...allowed].find((profile) => allowed.includes(profile)) || "";
     authEl("authProfileHint").hidden = authEl("authProfileField").hidden;
     authEl("authProfileHint").textContent = awsMode
       ? "Dieses Profil verwendet seine vorhandene AWS-Anmeldung. Bei abgelaufener Sitzung bitte zuerst mit AWS anmelden."
-      : "Der Tresor benötigt ein Rollenprofil. Für Login-/SSO-Profile ohne Rolle wähle „Anmeldeart wechseln“ → „AWS-Konfiguration des Rechners“.";
+      : "Wähle das Rollenprofil, das mit deinen gespeicherten Schlüsseln verwendet werden soll. Ausgegraute Profile sind nur mit einer bestehenden AWS-Anmeldung nutzbar.";
   }
   function showAuthFields() {
     clearAuthInputs();
     const action = authEl("authAction").value;
     authEl("authSubmit").textContent = { setup: "Tresor speichern", unlock: "Entsperren", update: "Schlüssel ersetzen", profile: "Profil speichern", password: "Passwort ändern", delete: "Tresor löschen", mode: "Anmeldeart wechseln" }[action] || "Speichern";
     const visible = {
-      authModeField: action === "mode",
+      authActionField: action !== "mode",
       authProfileField: ["setup", "update", "profile"].includes(action) || (action === "mode" && authEl("authMode").value === "aws"),
       authAccessField: ["setup", "update"].includes(action), authSecretField: ["setup", "update"].includes(action),
       authOldField: action === "password", authPasswordField: ["setup", "unlock", "password"].includes(action),
@@ -661,6 +662,9 @@ import { initAuthForm } from "./auth-form.js";
     };
     for (const [id, show] of Object.entries(visible)) authEl(id).hidden = !show;
     renderAuthProfiles();
+    authEl("authModeHelp").textContent = authModeExplanation(authEl("authMode").value);
+    authEl("authCheck").disabled = !authReady || authWorking || authEl("authMode").value !== authState?.mode;
+    if (action === "mode") authEl("authSubmit").textContent = authEl("authMode").value === "aws" ? "Bestehende AWS-Anmeldung aktivieren" : "Tresor-Anmeldung aktivieren";
     authEl("authPasswordLabel").textContent = action === "unlock" ? "Masterpasswort" : "Neues Masterpasswort (mindestens 12 Zeichen)";
   }
   function applyAuthState(state) {
@@ -668,15 +672,20 @@ import { initAuthForm } from "./auth-form.js";
     authState = state;
     authReady = state.ready;
     el.sendBtn.disabled = busy || !authReady;
-    const vaultLabel = state.exists ? state.locked ? "gesperrt" : "entsperrt" : "nicht eingerichtet";
-    authEl("authStatus").textContent = `Anmeldeart: ${state.mode === "vault" ? "Tresor" : "AWS-Konfiguration"} · Tresor ${vaultLabel} · ${state.connection === "connected" ? "AWS verbunden" : state.connection === "failed" ? "AWS-Verbindung fehlgeschlagen" : "AWS-Verbindung noch nicht geprüft"}${state.storageError ? " · Tresordatei nicht lesbar" : ""}`;
+    const summary = formatAuthSummary(state);
+    authEl("authSummary").textContent = summary;
+    authEl("authStatus").textContent = "Aktiv: " + summary + (state.storageError ? " · Tresordatei nicht lesbar" : "");
+    authEl("authActiveHint").textContent = state.mode === "aws"
+      ? "Die bestehende AWS-Anmeldung ist aktiv. Ein Masterpasswort wird auch nach einem Neustart nicht abgefragt."
+      : "Das Masterpasswort entsperrt deine Schlüssel. Ob AWS die Anmeldung akzeptiert, zeigt erst die Verbindungsprüfung.";
+    authEl("authErrorDetails").hidden = !state.connectionError;
+    authEl("authErrorText").textContent = formatAuthDiagnostic(state.connectionError);
     authEl("authBtn").textContent = state.mode === "vault" && state.locked ? "Einstellungen · gesperrt" : "Einstellungen";
     authEl("authLock").disabled = state.locked;
-    authEl("authCheck").disabled = !state.ready || authWorking;
+    authEl("authCheck").disabled = !state.ready || authWorking || authEl("authMode").value !== state.mode;
     el.accountChip.textContent = [state.profile, state.region, state.identityLabel].filter(Boolean).join(" · ");
     if (changed) {
-      const actions = state.exists ? state.locked ? ["unlock", "mode", "delete"] : ["profile", "update", "password", "mode", "delete"] : ["setup", "mode"];
-      if (state.mode === "aws" && !actions.includes("profile")) actions.unshift("profile");
+      const actions = state.mode === "aws" ? ["profile"] : state.exists ? state.locked ? ["unlock", "delete"] : ["profile", "update", "password", "delete"] : ["setup"];
       authEl("authMode").value = state.mode;
       authEl("authAction").replaceChildren(...actions.map((action) => {
         const option = document.createElement("option"); option.value = action; option.textContent = actionLabels[action]; return option;
@@ -690,7 +699,7 @@ import { initAuthForm } from "./auth-form.js";
     clearAuthInputs();
     const response = await apiFetch(`/api/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: encoded });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "AWS-Einstellung fehlgeschlagen.");
+    if (!response.ok) throw new Error(action === "check" && result.details ? "AWS-Verbindungsprüfung fehlgeschlagen. Siehe Details unten." : result.error || "AWS-Einstellung fehlgeschlagen.");
     applyAuthState(result);
   }
   async function refreshAuth() {
@@ -734,7 +743,17 @@ import { initAuthForm } from "./auth-form.js";
   authEl("authClose").addEventListener("click", () => authDialog.close());
   authDialog.addEventListener("close", clearAuthInputs);
   authEl("authAction").addEventListener("change", showAuthFields);
-  authEl("authMode").addEventListener("change", showAuthFields);
+  authEl("authMode").addEventListener("change", () => {
+    const switching = authEl("authMode").value !== authState?.mode;
+    const action = authEl("authAction");
+    [...action.options].find((option) => option.value === "mode")?.remove();
+    if (switching) {
+      const option = document.createElement("option"); option.value = "mode"; option.textContent = actionLabels.mode; action.append(option);
+    }
+    authEl("authAction").value = switching ? "mode" : [...authEl("authAction").options].find((option) => option.value !== "mode")?.value;
+    authEl("authFeedback").textContent = switching ? "Die Auswahl wird erst mit Aktivieren übernommen." : "";
+    showAuthFields();
+  });
   authEl("authLock").addEventListener("click", () => performAuth("lock", {}));
   authEl("authCheck").addEventListener("click", () => performAuth("check", {}));
   let lastActivitySent = 0;

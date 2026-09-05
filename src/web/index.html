@@ -332,17 +332,22 @@
   #authDialog #authRevealField { display: flex; align-items: center; gap: 8px; }
   #authDialog #authReveal { width: auto; margin: 0; }
   #authDialog #authRevealField[hidden] { display: none; }
-  #authFeedback { white-space: pre-wrap; }
+  #authFeedback, #authErrorText { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #authSummary { margin: 0; padding: 7px 20px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
+  #authModeHelp { padding: 12px; border-left: 3px solid var(--accent); background: var(--bg-input); border-radius: 6px; }
+  #authErrorDetails { margin-top: 16px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 6px; }
+  #authErrorDetails summary { cursor: pointer; font-weight: 600; }
 </style>
 </head>
 <body>
 <dialog id="authDialog" aria-labelledby="authTitle">
   <h2 id="authTitle">Einstellungen · AWS-Anmeldung</h2>
   <p id="authStatus" role="status"></p>
-  <p>Der Tresor speichert einen AWS-Zugang verschlüsselt auf diesem Rechner. Nach 15 Minuten Inaktivität wird er gesperrt.</p>
+  <p id="authActiveHint"></p>
   <form id="authForm" autocomplete="off">
-    <label>Aktion<select id="authAction"></select></label>
-    <label id="authModeField" hidden>Anmeldeart<select id="authMode"><option value="vault">Verschlüsselter Tresor</option><option value="aws">AWS-Konfiguration des Rechners</option></select></label>
+    <label id="authModeField">Wie möchtest du dich anmelden?<select id="authMode"><option value="vault">Gespeicherte Schlüssel verwenden</option><option value="aws">Bestehende AWS-Anmeldung verwenden</option></select></label>
+    <p id="authModeHelp"></p>
+    <label id="authActionField">Was möchtest du tun?<select id="authAction"></select></label>
     <label id="authProfileField" hidden>AWS-Profil<select id="authProfile"></select></label>
     <p id="authProfileHint" hidden></p>
     <label id="authAccessField" hidden>Access Key ID<input id="authAccess" type="password" autocomplete="off" maxlength="128" spellcheck="false"></label>
@@ -356,6 +361,7 @@
     <div class="auth-actions"><button type="submit" class="primary" id="authSubmit">Ausführen</button><button type="button" id="authCheck">AWS-Verbindung prüfen</button><button type="button" id="authLock">Jetzt sperren</button><button type="button" id="authClose">Schließen</button></div>
   </form>
   <p id="authFeedback" role="status" aria-live="polite"></p>
+  <details id="authErrorDetails" hidden open><summary>Details zur letzten AWS-Verbindungsprüfung</summary><p id="authErrorText"></p></details>
 </dialog>
 <header>
   <span class="logo">✳</span>
@@ -369,6 +375,7 @@
   <button id="systemBtn" title="System Prompt anzeigen/ändern">System</button>
   <button id="clearBtn" title="Verlauf leeren">Verlauf leeren</button>
 </header>
+<p id="authSummary" role="status">AWS-Anmeldung wird geladen …</p>
 
 <div id="usageOverlay" style="display:none">
   <div class="modal">

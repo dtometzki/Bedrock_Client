@@ -13,7 +13,7 @@ export function getCliOptionHelp(defaultWebPort) {
     ["-m, --model <name>", "Modell beim Start setzen"],
     ["-p, --profile <name>", "AWS Profil beim Start setzen"],
     ["-p list", "AWS Profile anzeigen und beenden"],
-    ["--auth <aws|vault>", "AWS-Provider oder verschluesselten Tresor verwenden"],
+    ["--auth <aws|vault>", "Bestehende AWS-Anmeldung (aws) oder gespeicherte Schluessel (vault) verwenden"],
     ["--auth-setup", "AWS-Tresor vor dem Chatstart einrichten"],
     ["-r, --region <name>", "AWS Region ueberschreiben"],
     ["-s, --system <text>", "System Prompt setzen"],

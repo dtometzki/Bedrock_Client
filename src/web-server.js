@@ -1,6 +1,7 @@
 import { combineAbortSignals } from "./abort-signals.js";
 import { AuthError } from "./credential-vault.js";
 import { safeAwsError } from "./auth.js";
+import { getAuthDiagnostic } from "./auth-diagnostics.js";
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
@@ -32,6 +33,7 @@ const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
 const STATIC_SCRIPTS = new Map([
   ["GET /app.js", new URL("./web/app.js", import.meta.url)],
   ["GET /auth-form.js", new URL("./web/auth-form.js", import.meta.url)],
+  ["GET /auth-display.js", new URL("./auth-display.js", import.meta.url)],
   ["GET /vendor/marked.min.js", new URL("./web/vendor/marked.min.js", import.meta.url)],
   ["GET /vendor/purify.min.js", new URL("./web/vendor/purify.min.js", import.meta.url)]
 ]);
@@ -870,7 +872,10 @@ export function createWebServer(options = {}) {
 
     Promise.resolve().then(() => handler(req, res)).catch((err) => {
       if (!res.headersSent) {
-        sendJson(res, err instanceof AuthError ? err.status : 500, { error: pathname.startsWith("/api/auth/") ? safeAwsError(err) : err.message });
+        sendJson(res, err instanceof AuthError ? err.status : 500, {
+          error: pathname.startsWith("/api/auth/") ? safeAwsError(err) : err.message,
+          ...(pathname.startsWith("/api/auth/") && getAuthDiagnostic(err) && { details: getAuthDiagnostic(err) })
+        });
       } else {
         res.end();
       }
