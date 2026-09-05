@@ -619,13 +619,32 @@
   const authEl = (id) => document.getElementById(id);
   const authDialog = authEl("authDialog");
   let authWorking = false;
+  let authProfiles = { profiles: [], roleProfiles: [] };
   const actionLabels = {
     setup: "Tresor einrichten", unlock: "Tresor entsperren", update: "Zugangsdaten ersetzen",
-    profile: "Rollenprofil wechseln", password: "Masterpasswort ändern", delete: "Tresor löschen / zurücksetzen",
+    profile: "AWS-Profil wechseln", password: "Masterpasswort ändern", delete: "Tresor löschen / zurücksetzen",
     mode: "Anmeldeart wechseln"
   };
   function clearAuthInputs() {
     for (const id of ["authAccess", "authSecret", "authOld", "authPassword", "authConfirm", "authDelete"]) authEl(id).value = "";
+  }
+  function renderAuthProfiles() {
+    const action = authEl("authAction").value;
+    const awsMode = (action === "mode" && authEl("authMode").value === "aws") || (action === "profile" && authState?.mode === "aws");
+    const previous = authEl("authProfile").value;
+    const allowed = awsMode ? authProfiles.profiles : authProfiles.roleProfiles;
+    authEl("authProfile").replaceChildren(...authProfiles.profiles.map((profile) => {
+      const option = document.createElement("option");
+      option.value = profile;
+      option.disabled = !allowed.includes(profile);
+      option.textContent = profile + (option.disabled ? " — AWS-Konfiguration" : "");
+      return option;
+    }));
+    authEl("authProfile").value = [previous, authState?.profile, ...allowed].find((profile) => allowed.includes(profile)) || "";
+    authEl("authProfileHint").hidden = authEl("authProfileField").hidden;
+    authEl("authProfileHint").textContent = awsMode
+      ? "Dieses Profil verwendet seine vorhandene AWS-Anmeldung. Bei abgelaufener Sitzung bitte zuerst mit AWS anmelden."
+      : "Der Tresor benötigt ein Rollenprofil. Für Login-/SSO-Profile ohne Rolle wähle „Anmeldeart wechseln“ → „AWS-Konfiguration des Rechners“.";
   }
   function showAuthFields() {
     clearAuthInputs();
@@ -633,13 +652,14 @@
     authEl("authSubmit").textContent = { setup: "Tresor speichern", unlock: "Entsperren", update: "Schlüssel ersetzen", profile: "Profil speichern", password: "Passwort ändern", delete: "Tresor löschen", mode: "Anmeldeart wechseln" }[action] || "Speichern";
     const visible = {
       authModeField: action === "mode",
-      authProfileField: ["setup", "update", "profile"].includes(action),
+      authProfileField: ["setup", "update", "profile"].includes(action) || (action === "mode" && authEl("authMode").value === "aws"),
       authAccessField: ["setup", "update"].includes(action), authSecretField: ["setup", "update"].includes(action),
       authOldField: action === "password", authPasswordField: ["setup", "unlock", "password"].includes(action),
       authConfirmField: ["setup", "password"].includes(action), authDeleteField: action === "delete",
       authRecovery: ["setup", "delete", "password"].includes(action)
     };
     for (const [id, show] of Object.entries(visible)) authEl(id).hidden = !show;
+    renderAuthProfiles();
     authEl("authPasswordLabel").textContent = action === "unlock" ? "Masterpasswort" : "Neues Masterpasswort (mindestens 12 Zeichen)";
   }
   function applyAuthState(state) {
@@ -655,6 +675,8 @@
     el.accountChip.textContent = [state.profile, state.region, state.identityLabel].filter(Boolean).join(" · ");
     if (changed) {
       const actions = state.exists ? state.locked ? ["unlock", "mode", "delete"] : ["profile", "update", "password", "mode", "delete"] : ["setup", "mode"];
+      if (state.mode === "aws" && !actions.includes("profile")) actions.unshift("profile");
+      authEl("authMode").value = state.mode;
       authEl("authAction").replaceChildren(...actions.map((action) => {
         const option = document.createElement("option"); option.value = action; option.textContent = actionLabels[action]; return option;
       }));
@@ -682,10 +704,8 @@
       const response = await apiFetch("/api/auth/profiles");
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Profile konnten nicht geladen werden.");
-      authEl("authProfile").replaceChildren(...data.profiles.map((profile) => {
-        const option = document.createElement("option"); option.value = profile; option.textContent = profile; return option;
-      }));
-      if (authState?.profile) authEl("authProfile").value = authState.profile;
+      authProfiles = data;
+      renderAuthProfiles();
     } catch (err) { authEl("authFeedback").textContent = err.message; }
   }
   async function performAuth(action, body) {
@@ -698,7 +718,7 @@
       authEl("authFeedback").textContent = {
         check: "AWS-Verbindung erfolgreich geprüft.", setup: "Tresor gespeichert und entsperrt. Du kannst die AWS-Verbindung jetzt prüfen.",
         unlock: "Tresor entsperrt.", lock: "Tresor gesperrt. Laufende AWS-Anfragen wurden abgebrochen.",
-        update: "Zugangsdaten ersetzt.", profile: "Rollenprofil gespeichert.", password: "Masterpasswort geändert.",
+        update: "Zugangsdaten ersetzt.", profile: "AWS-Profil übernommen.", password: "Masterpasswort geändert.",
         delete: "Tresor gelöscht.", mode: "Anmeldeart geändert."
       }[action];
     } catch (err) { authEl("authFeedback").textContent = err.message; }
@@ -713,6 +733,7 @@
   authEl("authClose").addEventListener("click", () => authDialog.close());
   authDialog.addEventListener("close", clearAuthInputs);
   authEl("authAction").addEventListener("change", showAuthFields);
+  authEl("authMode").addEventListener("change", showAuthFields);
   authEl("authLock").addEventListener("click", () => performAuth("lock", {}));
   authEl("authCheck").addEventListener("click", () => performAuth("check", {}));
   authEl("authForm").addEventListener("submit", (event) => {
@@ -729,7 +750,10 @@
     if (["setup", "password"].includes(action)) body.confirmation = authEl("authConfirm").value;
     if (action === "password") body.oldPassword = authEl("authOld").value;
     if (action === "delete") body.confirmation = authEl("authDelete").value;
-    if (action === "mode") body.mode = authEl("authMode").value;
+    if (action === "mode") {
+      body.mode = authEl("authMode").value;
+      if (body.mode === "aws" && authEl("authProfile").value) body.profile = authEl("authProfile").value;
+    }
     performAuth(action, body);
   });
   let lastActivitySent = 0;

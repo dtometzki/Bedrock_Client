@@ -74,6 +74,8 @@ region = eu-central-1
 
 The vault replaces the terminal credential source of the selected `source_profile` chain. It does not modify AWS config/credential files. The base key must be permitted to assume the configured role, and the role's trust policy must allow that identity. Role session names, external IDs and session durations are honored. Missing/cyclic role chains and MFA profiles are rejected. This first version stores one permanent key pair; temporary input keys requiring `AWS_SESSION_TOKEN`, MFA entry and multiple stored accounts are not supported.
 
+The web profile picker shows all local profiles. In vault mode, profiles without `role_arn` remain visible with an **AWS-Konfiguration** label and cannot be selected as role profiles. To use a login/SSO profile such as `Admins`, choose **Anmeldeart wechseln → AWS-Konfiguration des Rechners**, select that profile and apply the change. **AWS-Profil wechseln** also remains available in AWS mode. This uses the existing profile session and keeps the encrypted vault unchanged; renew an expired AWS login separately (for example, `aws login --profile Admins`). The profile selection applies to the running client; use `--auth aws --profile Admins` to select it explicitly on startup.
+
 After unlocking, select **AWS-Verbindung prüfen** or run `/auth check`. Unlocking decrypts the vault locally; the connection check calls AWS STS and shows the resulting identity. A failed AWS connection keeps the stored credentials. Bedrock and billing use the same role provider, and temporary role sessions refresh in the background while the vault is unlocked. Vault mode never silently falls back to environment credentials, SSO or unrelated AWS profiles.
 
 ### Terminal commands and mode selection

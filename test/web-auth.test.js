@@ -10,7 +10,7 @@ import { startWebServer } from "../src/web-server.js";
 
 const PASSWORD = "test-only-master-passphrase";
 const DATA = { accessKeyId: "AKIAEXAMPLEONLY000001", secretAccessKey: "s".repeat(40), profile: "role" };
-const PROFILES = { role: { role_arn: "arn:aws:iam::123456789012:role/Test", source_profile: "base" }, base: {} };
+const PROFILES = { role: { role_arn: "arn:aws:iam::123456789012:role/Test", source_profile: "base" }, base: {}, Admins: { login_session: "TEST-LOGIN-SESSION", region: "eu-west-1" } };
 async function fixture(t, options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bedrock-web-auth-test-"));
   const auth = new AuthService({ vault: new CredentialVault(directory), mode: "vault", profiles: async () => PROFILES,
@@ -53,7 +53,9 @@ test("all auth endpoints require token and preserve origin/host checks", async (
   });
   assert.equal(status, 403);
   assert.equal((await request("/api/auth/status")).status, 200);
-  assert.deepEqual((await request("/api/auth/profiles")).data.profiles, ["role"]);
+  const profileOptions = await request("/api/auth/profiles");
+  assert.deepEqual(profileOptions.data, { profiles: ["Admins", "base", "role"], roleProfiles: ["role"] });
+  assert.ok(!profileOptions.text.includes("TEST-LOGIN-SESSION"));
 });
 
 test("web starts without credentials; setup, reload, locked requests and recovery share one state", async (t) => {
@@ -131,4 +133,27 @@ test("vault stream errors never expose AWS secrets and the next valid request su
   assert.match(failed.text, /"failed":true/);
   assert.equal((await request("/api/state")).data.messages.length, 0);
   assert.match((await request("/api/chat", { message: "second" })).text, /recovered/);
+});
+test("login profiles can be selected explicitly in AWS mode without changing vault data", async (t) => {
+  const { request, auth } = await fixture(t);
+  await request("/api/auth/setup", { ...DATA, password: PASSWORD, confirmation: PASSWORD });
+  const before = auth.vault.read();
+  assert.equal((await request("/api/auth/profile", { profile: "Admins" })).status, 400);
+  assert.equal(auth.status().profile, "role");
+  assert.equal(auth.status().locked, false);
+  assert.equal((await request("/api/auth/mode", { mode: "vault", profile: "Admins" })).status, 400);
+  const selected = await request("/api/auth/mode", { mode: "aws", profile: "Admins" });
+  assert.equal(selected.status, 200);
+  assert.equal(selected.data.mode, "aws");
+  assert.equal(selected.data.profile, "Admins");
+  assert.equal(selected.data.region, "eu-west-1");
+  assert.equal(selected.data.ready, true);
+  assert.equal(selected.data.locked, true);
+  assert.equal(auth.vault.read(), before);
+  assert.equal((await request("/api/auth/profile", { profile: "base" })).status, 200);
+  assert.equal(auth.status().profile, "base");
+  await request("/api/auth/mode", { mode: "vault" });
+  await request("/api/auth/unlock", { password: PASSWORD });
+  assert.equal(auth.status().profile, "role");
+  assert.equal(auth.vault.read(), before);
 });

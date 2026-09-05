@@ -191,8 +191,14 @@ export class AuthService extends EventEmitter {
   }
 
   async listProfiles({ rolesOnly = false } = {}) {
+    const options = await this.profileOptions();
+    return rolesOnly ? options.roleProfiles : options.profiles;
+  }
+
+  async profileOptions() {
     const entries = await this.profiles();
-    return Object.keys(entries).filter((name) => /^[\w.@+=,-]{1,128}$/.test(name) && (!rolesOnly || entries[name].role_arn)).sort();
+    const profiles = Object.keys(entries).filter((name) => /^[\w.@+=,-]{1,128}$/.test(name)).sort();
+    return { profiles, roleProfiles: profiles.filter((name) => Boolean(entries[name].role_arn)) };
   }
 
   async validateRole(profile) {
@@ -306,16 +312,20 @@ export class AuthService extends EventEmitter {
   async selectMode(mode, profile) {
     return this.exclusive(async (epoch) => {
       if (!["aws", "vault"].includes(mode)) throw new AuthError("Anmeldeart muss aws oder vault sein.");
+      let region = this.regionOverride || "us-east-1";
       if (profile !== undefined) {
         validateProfile(profile);
         const profiles = await this.profiles();
         if (!Object.hasOwn(profiles, profile)) throw new AuthError("AWS-Profil nicht gefunden.");
+        if (mode === "vault") resolveRoleChain(profiles, profile);
+        region = this.regionOverride || profiles[profile].region || "us-east-1";
       }
       this.assertGeneration(epoch);
       this.saveMode(mode);
       this.lock();
       this.mode = mode;
       this.profile = profile || this.env.AWS_PROFILE || "default";
+      this.region = region;
       this.explicitProfile = Boolean(profile);
       this.profileOverride = mode === "vault" ? profile : null;
       return this.status();

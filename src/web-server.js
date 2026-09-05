@@ -774,7 +774,7 @@ export function createWebServer(options = {}) {
     if (!auth) throw new AuthError("AWS-Einstellungen nicht verfuegbar.", 404);
     res.setHeader("Cache-Control", "no-store");
     if (action === "status") { sendJson(res, 200, auth.status()); return; }
-    if (action === "profiles") { sendJson(res, 200, { profiles: await auth.listProfiles({ rolesOnly: true }) }); return; }
+    if (action === "profiles") { sendJson(res, 200, await auth.profileOptions()); return; }
     let body;
     try { body = await readJsonBody(req, { limit: 8192 }); }
     catch (err) { throw new AuthError("Ungueltige oder zu grosse AWS-Eingabe.", err.status || 400); }
