@@ -1,6 +1,8 @@
 import { combineAbortSignals } from "./abort-signals.js";
 import { AuthService, safeAwsError } from "./auth.js";
 import { manageAuth } from "./auth-prompt.js";
+import { backgroundStopCommand, createBackgroundReporter, launchWebBackground } from "./web-background.js";
+import { registerBackgroundServer, stopWebBackground } from "./web-background-control.js";
 import {
   ANSI,
   formatAccountSummary,
@@ -604,6 +606,7 @@ async function runChatLoop(ctx) {
 }
 
 export async function main() {
+  const background = createBackgroundReporter();
   let auth;
   let webStarted = false;
   try {
@@ -611,6 +614,12 @@ export async function main() {
 
     if (cliArgs.version) {
       console.log(`bedrock-chat ${getPackageVersion()}`);
+      return;
+    }
+
+    if (cliArgs.webStop && !cliArgs.help) {
+      const stopped = await stopWebBackground({ port: cliArgs.port });
+      console.log(stopped ? "Hintergrundserver beendet." : "Kein laufender Hintergrundserver gefunden.");
       return;
     }
 
@@ -626,6 +635,14 @@ export async function main() {
 
     if (cliArgs.profile === "-list" || cliArgs.profile === "--list" || cliArgs.profile === "list") {
       await printAwsProfiles();
+      return;
+    }
+
+    if (cliArgs.background) {
+      const started = await launchWebBackground();
+      console.log(`${ANSI.green}Web-GUI im Hintergrund:${ANSI.reset} ${sanitizeTerminalText(started.url)}`);
+      if (!started.opened) console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${sanitizeTerminalText(started.launchTarget)}`);
+      console.log(`Beenden mit: ${backgroundStopCommand()}`);
       return;
     }
 
@@ -742,6 +759,7 @@ export async function main() {
     }
 
     if (cliArgs.web) {
+      let registration;
       const { server, url, authToken } = await startWebServer({
         models,
         auth,
@@ -756,28 +774,42 @@ export async function main() {
         autoSave: autoSaveEnabled,
         messages: ctx.messages,
         effort: ctx.effort,
-        port: cliArgs.port ?? DEFAULT_WEB_PORT
+        port: cliArgs.port ?? DEFAULT_WEB_PORT,
+        prepareShutdown: background ? () => {
+          registration?.cleanup();
+          return () => process.kill(process.pid, "SIGTERM");
+        } : undefined
       });
       webStarted = true;
       server.once("close", () => auth.close());
       let bootstrap = null;
       try {
+        if (background) registration = registerBackgroundServer({ port: Number(new URL(url).port), token: authToken });
         bootstrap = authToken ? createBrowserBootstrap(url, authToken) : null;
       } catch (err) {
-        server.close();
+        try { registration?.cleanup(); } finally { server.close(); }
         throw err;
       }
 
       const cleanupBootstrap = () => bootstrap?.cleanup();
       server.once("close", cleanupBootstrap);
       process.once("exit", cleanupBootstrap);
+      if (registration) {
+        const cleanupRegistration = () => {
+          try { registration.cleanup(); }
+          catch (err) { console.error(sanitizeTerminalText(err.message)); }
+        };
+        server.once("close", cleanupRegistration);
+        process.once("exit", cleanupRegistration);
+      }
 
       console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${url}`);
       const launchTarget = bootstrap?.path || url;
+      let opened = false;
       if (cliArgs.noOpen) {
         console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${launchTarget}`);
       } else {
-        const opened = openInBrowser(launchTarget);
+        opened = openInBrowser(launchTarget);
         if (opened && bootstrap) {
           // Genug Zeit fuer einen langsamen Browserstart; danach liegt das
           // Token nicht mehr als Datei auf der Platte. cleanup ist idempotent.
@@ -788,11 +820,13 @@ export async function main() {
         }
       }
       console.log(`${ANSI.gray}Beenden mit Ctrl+C.${ANSI.reset}`);
+      background?.ready({ url, launchTarget, opened });
       return;
     }
 
     await runChatLoop(ctx);
   } catch (err) {
+    background?.error(err);
     console.error(`\nFehler: ${err.message}`);
     process.exitCode = 1;
   } finally {

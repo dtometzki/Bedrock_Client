@@ -30,6 +30,8 @@ test("parseCliArgs returns defaults", () => {
     noSave: false,
     debug: false,
     web: false,
+    background: false,
+    webStop: false,
     port: null,
     noOpen: false,
     inferenceOverrides: {}
@@ -62,6 +64,7 @@ test("parseCliArgs parses supported options", () => {
     "--no-save",
     "--debug",
     "--web",
+    "--background",
     "--port",
     "8080",
     "--no-open"
@@ -83,6 +86,8 @@ test("parseCliArgs parses supported options", () => {
     noSave: true,
     debug: true,
     web: true,
+    background: true,
+    webStop: false,
     port: 8080,
     noOpen: true,
     inferenceOverrides: {
@@ -113,6 +118,7 @@ test("parseCliArgs preserves profile list shortcut", () => {
 });
 
 test("parseCliArgs rejects invalid options", () => {
+  assert.throws(() => parseCliArgs(["--background"]), /benoetigt --web/);
   assert.throws(() => parseCliArgs(["--wat"]), /Ungueltige Argumente/);
   assert.throws(() => parseCliArgs(["--model"]), /Ungueltige Argumente/);
   assert.throws(() => parseCliArgs(["--max-tokens", "0"]), /Ungueltiger Wert/);
@@ -120,4 +126,11 @@ test("parseCliArgs rejects invalid options", () => {
   assert.throws(() => parseCliArgs(["--top-p", "1.5"]), /Ungueltiger Wert/);
   assert.throws(() => parseCliArgs(["--port", "0"]), /Ungueltiger Wert/);
   assert.throws(() => parseCliArgs(["--port", "70000"]), /Ungueltiger Wert/);
+});
+
+test("web stop accepts an optional port and rejects simultaneous startup", () => {
+  assert.equal(parseCliArgs(["--web-stop"]).webStop, true);
+  assert.equal(parseCliArgs(["--web-stop", "--port", "8080"]).port, 8080);
+  assert.throws(() => parseCliArgs(["--web-stop", "--web"]), /Start/);
+  assert.throws(() => parseCliArgs(["--web-stop", "--auth-setup"]), /Start/);
 });

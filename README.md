@@ -204,9 +204,13 @@ Start the chat as a local web interface instead of the terminal UI:
 node app_aws.js --web
 node app_aws.js --web --port 8080
 node app_aws.js --web --no-open
+node app_aws.js --web --background
+node app_aws.js --web-stop
 ```
 
-The default browser opens automatically with the GUI (default `http://127.0.0.1:3456`); `--no-open` disables that and only prints the URL.
+The default browser opens automatically with the GUI (default `http://127.0.0.1:3456`); `--no-open` disables that and prints the URL plus a private browser start-file path.
+
+Add `--background` to release the terminal after the web server has started successfully. The server runs independently and continues when the terminal is closed. Stop it from another terminal with `node app_aws.js --web-stop`; no process ID needs to be remembered. With multiple background servers, select one using `--web-stop --port 8080`. The client keeps a private `web-background-<port>.json` file in its configuration directory containing the local port and server access token. This file is removed on normal shutdown. Stopping authenticates to that specific server instead of signalling a saved PID, so a stale entry cannot kill an unrelated process. The stop command also works while the vault is locked. Servers started before this feature need to be stopped once using their previously printed command and then restarted. Startup failures such as an occupied port are reported before the launcher exits. `--no-open` also works in background mode and prints the private browser start-file path; open that file to authenticate. Normal `--web` stays in the foreground and ends with Ctrl+C. Background mode keeps the same loopback/token protection and vault locking rules; unlock the vault in the web settings.
 
 The web GUI supports streaming responses with Markdown rendering, model switching, an effort selector for reasoning models (adaptive-thinking depth `low`/`medium`/`high`, Opus also `max`; disabled for models without effort support), collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, per-response token/cost estimates, a usage panel with AWS Cost Explorer billing and session token statistics (the web equivalent of `/usage`), and file attachments via the "+" button or drag & drop (documents: pdf, csv, doc, docx, xls, xlsx, html, txt, md; images: png, jpg, gif, webp; max. 5 files, 4.5 MB each). CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
 

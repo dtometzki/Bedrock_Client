@@ -27,6 +27,8 @@ export function getCliOptionHelp(defaultWebPort) {
     ["--no-save", "Verlauf nicht automatisch speichern"],
     ["--debug", "Debug-Ausgabe fuer Bedrock Requests aktivieren"],
     ["--web", "Chat als lokale Web-GUI im Browser starten"],
+    ["--background", "Web-GUI im Hintergrund starten und Terminal freigeben (mit --web)"],
+    ["--web-stop", "Hintergrundserver beenden (bei mehreren mit --port auswaehlen)"],
     ["--port <n>", `Port fuer die Web-GUI (Standard ${defaultWebPort})`],
     ["--no-open", "Web-GUI nicht automatisch im Browser oeffnen"],
     ["-v, --version", "Version anzeigen"],
@@ -122,6 +124,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
         "no-save": { type: "boolean" },
         debug: { type: "boolean" },
         web: { type: "boolean" },
+        background: { type: "boolean" },
+        "web-stop": { type: "boolean" },
         port: { type: "string" },
         "no-open": { type: "boolean" }
       }
@@ -131,6 +135,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
   }
 
   const values = parsed.values;
+  if (values["web-stop"] && (values.web || values.background || values["auth-setup"])) throw new Error("--web-stop kann nicht mit einem Start kombiniert werden.");
+  if (values.background && !values.web) throw new Error("--background benoetigt --web.");
   if (values.auth !== undefined && !["aws", "vault"].includes(values.auth)) {
     throw new Error("--auth muss aws oder vault sein.");
   }
@@ -181,6 +187,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     noSave: Boolean(values["no-save"]),
     debug: Boolean(values.debug),
     web: Boolean(values.web),
+    background: Boolean(values.background),
+    webStop: Boolean(values["web-stop"]),
     port,
     noOpen: Boolean(values["no-open"]),
     inferenceOverrides

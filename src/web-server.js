@@ -805,6 +805,22 @@ export function createWebServer(options = {}) {
   }
 
   const routes = new Map([
+    ["POST /api/server/stop", async (req, res) => {
+      if (!options.prepareShutdown || !authToken) throw new AuthError("Kein geschuetzter Hintergrundserver.", 404);
+      const body = await readJsonBody(req, { limit: 64 });
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) throw new AuthError("Ungueltige Stop-Anfrage.", 400);
+      const shutdown = options.prepareShutdown();
+      let scheduled = false;
+      const scheduleShutdown = () => {
+        if (scheduled) return;
+        scheduled = true;
+        setImmediate(shutdown);
+      };
+      res.once("finish", scheduleShutdown);
+      res.once("close", scheduleShutdown);
+      sendJson(res, 200, { stopping: true });
+      if (res.destroyed) scheduleShutdown();
+    }],
     ...["status", "profiles"].map((action) => [`GET /api/auth/${action}`, (req, res) => handleAuth(req, res, action)]),
     ...Object.keys(authFields).map((action) => [`POST /api/auth/${action}`, (req, res) => handleAuth(req, res, action)]),
     ["GET /", (_req, res) => handleIndex(res)],
