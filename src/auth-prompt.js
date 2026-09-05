@@ -1,6 +1,7 @@
 import { AuthError } from "./credential-vault.js";
 import { sanitizeTerminalText } from "./response-format.js";
 import { StringDecoder } from "node:string_decoder";
+import { authModeExplanation, formatAuthSummary } from "./auth-display.js";
 
 // Raw input: no echo, readline history, command-line arguments or env secrets.
 export function readSecret(label, { input = process.stdin, output = process.stdout, onActivity = () => {} } = {}) {
@@ -48,7 +49,7 @@ export function readSecret(label, { input = process.stdin, output = process.stdo
 export async function manageAuth(auth, action = "status", ask = (label) => readSecret(label, { onActivity: () => auth.touch() })) {
   if (action === "status") {
     const status = auth.status();
-    console.log(`AWS-Anmeldung: ${status.mode}, Tresor ${status.exists ? status.locked ? "gesperrt" : "entsperrt" : "nicht eingerichtet"}, Verbindung: ${status.connection}`);
+    console.log("AWS-Anmeldung: " + sanitizeTerminalText(formatAuthSummary(status)));
     console.log("/auth setup | unlock | lock | update | password | delete | check | aws | vault");
     return;
   }
@@ -79,6 +80,7 @@ export async function manageAuth(auth, action = "status", ask = (label) => readS
   } else if (action === "check") {
     await auth.checkConnection();
   } else if (["aws", "vault"].includes(action)) {
+    console.log(authModeExplanation(action));
     await auth.selectMode(action);
   } else throw new AuthError("Unbekannter /auth-Befehl. Zugangsdaten nur in die verdeckte Eingabe eingeben.");
   if (!["setup", "unlock"].includes(action)) await manageAuth(auth, "status", ask);

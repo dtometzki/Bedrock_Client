@@ -8,6 +8,7 @@ import { CredentialVault } from "../src/credential-vault.js";
 import { loadCurrentBedrockBillingCost } from "../src/usage.js";
 import { createBedrockClient } from "../src/bedrock.js";
 import { parseCliArgs } from "../src/cli-args.js";
+import { getAuthDiagnostic } from "../src/auth-diagnostics.js";
 
 const PASSWORD = "test-only-master-passphrase";
 const DATA = { accessKeyId: "AKIAEXAMPLEONLY000001", secretAccessKey: "s".repeat(40), profile: "role" };
@@ -82,6 +83,7 @@ test("lock revokes cached credentials, aborts work and rejects late identity res
   await assert.rejects(pending, { status: 423 });
   operation.finish();
   assert.equal(auth.status().identityLabel, "");
+  assert.equal(auth.status().connectionError, null);
   assert.equal(auth.status().locked, true);
   assert.ok(destroyed > 0);
   await auth.unlock(PASSWORD);
@@ -174,6 +176,7 @@ test("password change, restart, deletion failures and confirmed reset", async (t
   t.after(() => second.close());
   assert.equal(second.status().mode, "vault");
   assert.equal(second.status().locked, true);
+  assert.equal(second.status().roleName, "");
   await assert.rejects(second.remove("yes"));
   fs.mkdirSync(`${auth.vault.file}.lock`);
   await assert.rejects(auth.remove("TRESOR LOESCHEN"), { status: 409 });
@@ -181,6 +184,80 @@ test("password change, restart, deletion failures and confirmed reset", async (t
   fs.rmdirSync(`${auth.vault.file}.lock`);
   await second.remove("TRESOR LOESCHEN");
   assert.equal(second.status().exists, false);
+});
+
+test("role chain failures identify the failed source role and recovery clears diagnostics", async (t) => {
+  let fail = true;
+  const auth = fixture(t, {
+    profiles: async () => ({ ...PROFILES, top: { role_arn: "arn:aws:iam::123456789012:role/Top", source_profile: "role" } }),
+    temporary: ({ params, masterCredentials }) => async () => {
+      await masterCredentials();
+      if (fail && params.RoleArn === PROFILES.role.role_arn) throw Object.assign(new Error(DATA.secretAccessKey), { name: "AccessDenied" });
+      return { accessKeyId: "temporary", secretAccessKey: "temporary-secret", expiration: new Date(Date.now() + 3600000) };
+    },
+    identityClient: (config) => ({ send: async () => { await config.credentials(); return { Arn: "arn:aws:sts::123456789012:assumed-role/Top/test" }; }, destroy() {} })
+  });
+  await auth.setup({ ...DATA, profile: "top" }, PASSWORD, PASSWORD);
+  const original = auth.vault.read();
+  await assert.rejects(auth.checkConnection(), (error) => {
+    assert.equal(getAuthDiagnostic(error).roleArn, PROFILES.role.role_arn);
+    assert.match(error.message, /AssumeRole/);
+    assert.ok(!error.message.includes(DATA.secretAccessKey));
+    return true;
+  });
+  assert.equal(auth.status().connectionError.profile, "top");
+  assert.equal(auth.status().roleName, "Top");
+  assert.equal(auth.vault.read(), original);
+  fail = false;
+  await auth.checkConnection();
+  assert.equal(auth.status().connectionError, null);
+  assert.equal(auth.status().connection, "connected");
+  await auth.changeProfile("other");
+  assert.equal(auth.status().roleName, "Other");
+  assert.equal(auth.status().connection, "unchecked");
+  auth.lock();
+  assert.equal(auth.status().roleName, "Other", "public role metadata remains visible during a process lifetime");
+  assert.equal(auth.status().profile, "", "vault profile stays encrypted at rest");
+});
+
+test("late failed identity checks cannot restore details after locking", async (t) => {
+  let rejectIdentity;
+  let announce;
+  const started = new Promise((resolve) => { announce = resolve; });
+  const auth = fixture(t, { identityClient: () => ({ send: () => { announce(); return new Promise((_, reject) => { rejectIdentity = reject; }); }, destroy() {} }) });
+  await setup(auth);
+  const pending = auth.checkConnection();
+  await started;
+  auth.lock();
+  rejectIdentity(Object.assign(new Error("private SDK message"), { name: "AccessDenied" }));
+  await assert.rejects(pending, { status: 423 });
+  assert.equal(auth.status().connectionError, null);
+  assert.equal(auth.status().connection, "unchecked");
+  await auth.unlock(PASSWORD);
+  assert.equal(auth.status().ready, true);
+});
+
+test("invalid role configuration has actionable diagnostics and leaves setup retryable", async (t) => {
+  let profiles = { role: { ...PROFILES.role, source_profile: "role" } };
+  const auth = fixture(t, { profiles: async () => profiles });
+  await assert.rejects(auth.setup(DATA, PASSWORD, PASSWORD), (error) => {
+    assert.match(getAuthDiagnostic(error).reason, /Kreis in source_profile.*role/);
+    assert.equal(getAuthDiagnostic(error).code, "ConfigurationError");
+    return true;
+  });
+  assert.equal(auth.vault.exists(), false);
+  profiles = PROFILES;
+  await setup(auth);
+  assert.equal(auth.status().ready, true);
+});
+
+test("existing AWS profile metadata is available without making an AWS request", async (t) => {
+  const auth = fixture(t, { mode: "aws", profile: "other", identityClient: () => assert.fail("must not call STS") });
+  await auth.refreshProfileMetadata();
+  assert.equal(auth.status().roleName, "Other");
+  assert.equal(auth.status().region, "us-east-1");
+  assert.equal(auth.status().connection, "unchecked");
+  assert.equal(auth.status().ready, true);
 });
 
 test("CLI auth options retain explicit profile precedence", (t) => {

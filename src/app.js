@@ -647,6 +647,7 @@ export async function main() {
     }
 
     auth = new AuthService({ mode: cliArgs.authSetup ? "vault" : cliArgs.auth, profile: cliArgs.profile, region: cliArgs.region });
+    await auth.refreshProfileMetadata();
     if (cliArgs.authSetup && !cliArgs.web) await manageAuth(auth, "setup");
     if (!cliArgs.web && auth.mode === "vault" && auth.status().exists && auth.status().locked) {
       try { await manageAuth(auth, "unlock"); }
