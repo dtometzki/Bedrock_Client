@@ -94,6 +94,8 @@ After unlocking, select **AWS-Verbindung prüfen** or run `/auth check`. Unlocki
 | `/auth check` | Check the AWS identity through STS |
 | `/auth aws` / `/auth vault` | Save the preferred authentication mode |
 
+Successful vault setup and unlocking continue without automatically printing authentication status or command help. Enter `/auth` whenever you want to see them; authentication errors are still reported.
+
 `--auth aws` and `--auth vault` override the mode for a start. Without a configured vault, the existing AWS provider chain is the default. Successful vault setup/unlock saves vault mode as the preference. An explicit `--profile` without `--auth` retains the existing AWS-profile meaning; use `--auth vault --profile bedrock-role` to override the role profile for that vault process. `--region` continues to override the profile region. Authentication changes preserve the chat history; use `/clear` or **Verlauf leeren** when starting a separate conversation.
 
 ### Locking and storage

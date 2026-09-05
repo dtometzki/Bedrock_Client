@@ -81,5 +81,5 @@ export async function manageAuth(auth, action = "status", ask = (label) => readS
   } else if (["aws", "vault"].includes(action)) {
     await auth.selectMode(action);
   } else throw new AuthError("Unbekannter /auth-Befehl. Zugangsdaten nur in die verdeckte Eingabe eingeben.");
-  await manageAuth(auth, "status", ask);
+  if (!["setup", "unlock"].includes(action)) await manageAuth(auth, "status", ask);
 }
