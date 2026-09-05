@@ -732,7 +732,8 @@ test("GET /api/usage faengt Billing-Fehler ab", async () => {
     const response = await fetch(`${url}/api/usage`);
     assert.equal(response.status, 200);
     const data = await response.json();
-    assert.match(data.billing.error, /Cost Explorer nicht erreichbar/);
+    assert.match(data.billing.error, /AWS-Anmeldung oder Verbindung fehlgeschlagen/);
+    assert.ok(!data.billing.error.includes("Cost Explorer nicht erreichbar"));
     assert.equal(data.session.requests, 0);
   });
 });

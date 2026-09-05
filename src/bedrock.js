@@ -10,11 +10,12 @@ export const DEFAULT_INFERENCE_CONFIG = {
   temperature: DEFAULT_TEMPERATURE
 };
 
-export function createBedrockClient({ region } = {}) {
+export function createBedrockClient({ region, credentials } = {}) {
   // Keine statischen Credentials: Das SDK löst sie über die Default Provider
   // Chain auf (Env, SSO, Profildateien, Assume-Role) und erneuert sie bei Bedarf.
   return new BedrockRuntimeClient({
-    region: region || "us-east-1"
+    region: region || "us-east-1",
+    ...(credentials && { credentials })
   });
 }
 

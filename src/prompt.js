@@ -208,7 +208,7 @@ const BRACKETED_PASTE_OFF = "\u001b[?2004l";
 // Terminalspalten. Bei Emoji oder ostasiatischen Breitzeichen kann die
 // Cursorposition daher optisch verrutschen; der eingegebene Text selbst
 // bleibt korrekt.
-export async function readPrompt({ history = [] } = {}) {
+export async function readPrompt({ history = [], onActivity = () => {} } = {}) {
   if (!process.stdin.isTTY) {
     const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
     try {
@@ -380,6 +380,7 @@ export async function readPrompt({ history = [] } = {}) {
     }
 
     function onKeypress(str, key = {}) {
+      onActivity();
       if (key.name === "paste-start") {
         pasting = true;
         return;
