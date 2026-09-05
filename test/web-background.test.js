@@ -41,8 +41,13 @@ test("background launcher exits while authenticated web server stays usable; sto
   const { stdout, stderr } = await exec(process.execPath, [entrypoint, "--web", "--background", "--no-open", "--no-save", "--auth", "vault", "--port", String(port)], { env, timeout: 10000 });
   assert.equal(stderr, "");
   const plain = stdout.replace(/\x1b\[[0-9;]*m/g, "");
-  pid = Number(plain.match(/(?:kill -TERM |taskkill \/PID )(\d+)/)?.[1]);
+  const stateFile = path.join(env.BEDROCK_CHAT_CONFIG_DIR, `web-background-${port}.json`);
+  const registration = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  pid = registration.pid;
   assert.ok(pid > 0);
+  assert.match(plain, /Beenden mit: .\/app_aws.js --web-stop/);
+  assert.ok(!plain.includes(registration.token));
+  if (process.platform !== "win32") assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
   assert.match(plain, /Web-GUI im Hintergrund:/);
   assert.ok(!plain.includes("#token="));
   const launchPath = plain.match(/Sichere Startdatei: (.+)/)?.[1];
@@ -55,12 +60,16 @@ test("background launcher exits while authenticated web server stays usable; sto
   const response = await fetch(url + "/api/auth/status", { headers: { "x-bedrock-token": token } });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).locked, true);
-  process.kill(pid, "SIGTERM");
+  const stoppedCommand = await exec(process.execPath, [entrypoint, "--web-stop"], { env, timeout: 10000 });
+  assert.match(stoppedCommand.stdout, /Hintergrundserver beendet/);
   await waitUntil(async () => {
     try { await fetch(url, { signal: AbortSignal.timeout(200) }); return false; } catch { return true; }
   });
   await waitUntil(() => !fs.existsSync(launchPath));
+  assert.equal(fs.existsSync(stateFile), false);
   stopped = true;
+  const repeated = await exec(process.execPath, [entrypoint, "--web-stop"], { env, timeout: 10000 });
+  assert.match(repeated.stdout, /Kein laufender Hintergrundserver/);
 });
 
 test("occupied port is reported as startup failure without claiming a running background server", { timeout: 15000 }, async (t) => {
@@ -108,7 +117,6 @@ test("timeout and spawn failure cancel only the newly spawned child", async () =
   }
 });
 
-test("stop command matches the platform", () => {
-  assert.equal(backgroundStopCommand(1234, "darwin"), "kill -TERM 1234");
-  assert.equal(backgroundStopCommand(1234, "win32"), "taskkill /PID 1234 /T");
+test("stop command needs no remembered process ID", () => {
+  assert.equal(backgroundStopCommand(), "./app_aws.js --web-stop");
 });

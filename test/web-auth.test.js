@@ -157,3 +157,24 @@ test("login profiles can be selected explicitly in AWS mode without changing vau
   assert.equal(auth.status().profile, "role");
   assert.equal(auth.vault.read(), before);
 });
+
+test("background stop requires token, trusted origin and an empty validated body", async (t) => {
+  let stops = 0;
+  const { request } = await fixture(t, { serverOptions: { prepareShutdown: () => () => { stops++; } } });
+  assert.equal((await request("/api/server/stop", {}, { "x-bedrock-token": "" })).status, 403);
+  assert.equal((await request("/api/server/stop", {}, { Origin: "http://evil.example" })).status, 403);
+  assert.equal((await request("/api/server/stop", { unexpected: true })).status, 400);
+  assert.equal((await request("/api/server/stop", [])).status, 400);
+  assert.equal(stops, 0);
+  assert.equal((await request("/api/server/stop", {})).status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stops, 1);
+});
+
+test("foreground and tokenless servers cannot be stopped through the background endpoint", async (t) => {
+  const { request } = await fixture(t);
+  assert.equal((await request("/api/server/stop", {})).status, 404);
+  assert.equal((await request("/api/auth/status")).status, 200);
+  const unprotected = await fixture(t, { serverOptions: { authToken: null, prepareShutdown: () => assert.fail("must require a configured token") } });
+  assert.equal((await unprotected.request("/api/server/stop", {})).status, 404);
+});

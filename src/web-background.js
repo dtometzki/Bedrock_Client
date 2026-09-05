@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 const CHILD_ENV = "BEDROCK_WEB_BACKGROUND_CHILD";
 
-// Readiness travels over private IPC, never a URL token or a PID file.
+// Readiness travels over private IPC, never a URL token in terminal output.
 export function launchWebBackground({ argv = process.argv.slice(2), env = process.env,
   entrypoint = fileURLToPath(new URL("../app_aws.js", import.meta.url)),
   spawnFn = spawn, timeoutMs = 30_000 } = {}) {
@@ -71,6 +71,6 @@ export function createBackgroundReporter() {
   };
 }
 
-export function backgroundStopCommand(pid, platform = process.platform) {
-  return platform === "win32" ? `taskkill /PID ${pid} /T` : `kill -TERM ${pid}`;
+export function backgroundStopCommand() {
+  return "./app_aws.js --web-stop";
 }
