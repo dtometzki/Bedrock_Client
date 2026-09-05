@@ -1,6 +1,7 @@
 import { combineAbortSignals } from "./abort-signals.js";
 import { AuthService, safeAwsError } from "./auth.js";
 import { manageAuth } from "./auth-prompt.js";
+import { backgroundStopCommand, createBackgroundReporter, launchWebBackground } from "./web-background.js";
 import {
   ANSI,
   formatAccountSummary,
@@ -604,6 +605,7 @@ async function runChatLoop(ctx) {
 }
 
 export async function main() {
+  const background = createBackgroundReporter();
   let auth;
   let webStarted = false;
   try {
@@ -626,6 +628,14 @@ export async function main() {
 
     if (cliArgs.profile === "-list" || cliArgs.profile === "--list" || cliArgs.profile === "list") {
       await printAwsProfiles();
+      return;
+    }
+
+    if (cliArgs.background) {
+      const started = await launchWebBackground();
+      console.log(`${ANSI.green}Web-GUI im Hintergrund:${ANSI.reset} ${sanitizeTerminalText(started.url)}`);
+      if (!started.opened) console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${sanitizeTerminalText(started.launchTarget)}`);
+      console.log(`Beenden mit: ${backgroundStopCommand(started.pid)}`);
       return;
     }
 
@@ -774,10 +784,11 @@ export async function main() {
 
       console.log(`${ANSI.green}Web-GUI:${ANSI.reset} ${url}`);
       const launchTarget = bootstrap?.path || url;
+      let opened = false;
       if (cliArgs.noOpen) {
         console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${launchTarget}`);
       } else {
-        const opened = openInBrowser(launchTarget);
+        opened = openInBrowser(launchTarget);
         if (opened && bootstrap) {
           // Genug Zeit fuer einen langsamen Browserstart; danach liegt das
           // Token nicht mehr als Datei auf der Platte. cleanup ist idempotent.
@@ -788,11 +799,13 @@ export async function main() {
         }
       }
       console.log(`${ANSI.gray}Beenden mit Ctrl+C.${ANSI.reset}`);
+      background?.ready({ url, launchTarget, opened });
       return;
     }
 
     await runChatLoop(ctx);
   } catch (err) {
+    background?.error(err);
     console.error(`\nFehler: ${err.message}`);
     process.exitCode = 1;
   } finally {
