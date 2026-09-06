@@ -39,7 +39,7 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
 
   const MAX_ATTACHMENTS = 5;
   const MAX_ATTACHMENT_BYTES = 4.5 * 1000 * 1000;
-  const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", max: "Max" };
+  const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", xhigh: "Sehr hoch", max: "Max" };
 
   // Modelltext ist nicht vertrauenswuerdig. Eine enge Allowlist erhaelt die
   // uebliche Markdown-Formatierung, entfernt aber insbesondere style-Tags,

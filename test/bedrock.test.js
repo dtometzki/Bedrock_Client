@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { findModel, getModelInvocationId, loadModels, normalizeEffort, resolveEffortLevel } from "../src/models.js";
+import { getModelPricing } from "../src/usage.js";
 import {
   buildAdaptiveThinkingFields,
   buildInferenceConfig,
@@ -22,6 +24,41 @@ function streamFrom(events) {
     }
   })();
 }
+
+test("bundled Fable 5.1 produces supported Converse requests and preserves Fable 5", async () => {
+  const models = loadModels(new URL("../models.json", import.meta.url));
+  const model = findModel(models, "claude-fable-5-1");
+  assert.ok(model);
+  assert.equal(getModelInvocationId(model), "us.anthropic.claude-fable-5-1");
+  assert.equal(regionForModelId(getModelInvocationId(model), "eu-central-1"), "us-east-1");
+  assert.equal(findModel(models, "claude-fable-5").id, "us.anthropic.claude-fable-5");
+  assert.equal(resolveEffortLevel(model), "high");
+  assert.equal(getModelPricing(model).input, 10);
+  assert.equal(getModelPricing(model).output, 50);
+
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+    let sentCommand;
+    const client = {
+      async send(command) {
+        sentCommand = command;
+        return { stream: streamFrom([{ contentBlockDelta: { delta: { text: "ok" } } }]) };
+      }
+    };
+    for await (const event of streamConverse(client, {
+      modelId: getModelInvocationId(model),
+      messages: [{ role: "user", content: [{ text: "Hello" }] }],
+      inferenceConfig: buildInferenceConfig(model, { temperature: 0.4, topP: 0.5, maxTokens: 100 }),
+      additionalModelRequestFields: buildAdaptiveThinkingFields(resolveEffortLevel(model, effort), normalizeEffort(model).style)
+    })) {
+      void event;
+    }
+    assert.equal(sentCommand.input.modelId, "us.anthropic.claude-fable-5-1");
+    assert.deepEqual(sentCommand.input.inferenceConfig, { maxTokens: 100 });
+    assert.deepEqual(sentCommand.input.additionalModelRequestFields, {
+      thinking: { type: "adaptive" }, output_config: { effort }
+    });
+  }
+});
 
 test("buildInferenceConfig merges defaults, model config and CLI overrides", () => {
   assert.deepEqual(buildInferenceConfig({
