@@ -154,6 +154,6 @@ test("background vault uses the normal URL and forgets browser sessions on resta
   await exec(process.execPath, args, { env, timeout: 10000 });
   assert.equal((await fetch(url + "/api/state", { headers: { ...headers, Cookie: cookie } })).status, 403);
   const state = await fetch(url + "/api/browser/status", { headers }).then((res) => res.json());
-  assert.deepEqual(state, { authenticated: false, vaultLogin: true });
+  assert.deepEqual(state, { authenticated: false, vaultLogin: true, switchesToVault: false });
   await stop();
 });

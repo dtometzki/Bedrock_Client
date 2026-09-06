@@ -42,7 +42,7 @@ async function fixture(t, { setup = true, serverOptions = {} } = {}) {
 
 test("vault password creates a private browser cookie shared across tabs; other browsers prove the password separately", async (t) => {
   const { request, login } = await fixture(t);
-  assert.deepEqual((await request("/api/browser/status")).data, { authenticated: false, vaultLogin: true });
+  assert.deepEqual((await request("/api/browser/status")).data, { authenticated: false, vaultLogin: true, switchesToVault: false });
   assert.equal((await request("/api/state")).status, 403);
   const first = await login();
   assert.equal(first.status, 200);
@@ -167,4 +167,41 @@ test("lock aborts a cookie-authenticated stream and prevents a pending request b
   connected.end('"}');
   await pending;
   assert.equal(f.getState().systemPrompt, "");
+});
+
+
+test("an existing vault remains reachable from the start page when AWS authentication is selected", async (t) => {
+  const { request, auth, login, advance } = await fixture(t);
+  await auth.selectMode("aws", "base");
+  const revision = auth.vault.currentRevision();
+  const connected = await request("/api/browser/connect", {}, "", { "x-bedrock-token": CONTROL });
+  assert.equal(connected.status, 200);
+  const status = await request("/api/browser/status");
+  assert.deepEqual(status.data, { authenticated: false, vaultLogin: true, switchesToVault: true });
+  assert.equal(auth.mode, "aws", "visiting the start page does not change authentication");
+  const failed = await login("wrong-master-password");
+  assert.equal(failed.status, 401);
+  assert.equal(failed.cookie, undefined);
+  assert.equal(auth.mode, "aws");
+  assert.equal(auth.vault.currentRevision(), revision);
+  assert.equal((await request("/api/state", undefined, connected.cookie)).status, 200);
+  advance(31000);
+  const unlocked = await login();
+  assert.equal(unlocked.status, 200);
+  assert.ok(unlocked.cookie);
+  assert.equal(auth.mode, "vault");
+  assert.equal(auth.status().locked, false);
+  assert.equal(auth.vault.currentRevision(), revision, "changing the login mode preserves stored credentials");
+  assert.equal((await request("/api/state", undefined, connected.cookie)).status, 403);
+  assert.equal((await request("/api/state", undefined, unlocked.cookie)).status, 200);
+  assert.deepEqual((await request("/api/browser/status", undefined, unlocked.cookie)).data,
+    { authenticated: true, vaultLogin: true, switchesToVault: false });
+});
+
+test("without a vault the start page still requires the private startup file", async (t) => {
+  const { request, login } = await fixture(t, { setup: false });
+  assert.deepEqual((await request("/api/browser/status")).data,
+    { authenticated: false, vaultLogin: false, switchesToVault: false });
+  assert.equal((await login()).status, 403);
+  assert.equal((await request("/api/state")).status, 403);
 });

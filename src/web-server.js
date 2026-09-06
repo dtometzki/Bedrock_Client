@@ -812,7 +812,7 @@ export function createWebServer(options = {}) {
     ["GET /api/browser/status", (req, res) => {
       const status = auth?.status(); // Checks idle expiry before reading the cookie.
       sendJson(res, 200, { authenticated: !authToken || Boolean(browserSessions.get(req)),
-        vaultLogin: Boolean(status?.exists && status.mode === "vault") });
+        vaultLogin: Boolean(status?.exists), switchesToVault: Boolean(status?.exists && status.mode !== "vault") });
     }],
     ["POST /api/browser/connect", async (req, res) => {
       if (!authToken || !isTokenValid(req, authToken)) throw new AuthError("Sichere Startdatei erforderlich.", 403);
@@ -823,7 +823,7 @@ export function createWebServer(options = {}) {
       sendJson(res, 200, { authenticated: true });
     }],
     ["POST /api/browser/unlock", async (req, res) => {
-      if (!auth || auth.mode !== "vault" || !auth.status().exists) throw new AuthError("Sichere Startdatei erforderlich.", 403);
+      if (!auth || !auth.status().exists) throw new AuthError("Sichere Startdatei erforderlich.", 403);
       const body = await readJsonBody(req, { limit: 8192 });
       if (!body || Array.isArray(body) || typeof body !== "object" || Object.keys(body).length !== 1 ||
           typeof body.password !== "string" || !body.password || Buffer.byteLength(body.password) > 1024) throw new AuthError("Masterpasswort erforderlich.");

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.13.1 - 2026-09-06
+
+- Show the master-password form whenever a vault exists, including when existing AWS authentication is selected. The start page offers an explicit switch to vault authentication instead of trapping users behind the private-start-file hint. Failed authentication preserves the active mode and existing browser sessions.
+- Clarify the first-login hint when no vault exists; retain private-start-file access for users who want to keep existing AWS authentication.
+
 ## 1.13.0 - 2026-09-06
 
 - Replace tab-local web access tokens with revocable HttpOnly, SameSite=Strict browser sessions shared across tabs and windows. In vault mode, authenticate at the normal local URL with the master password, including when the server runs in the background.

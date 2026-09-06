@@ -50,9 +50,12 @@ export function initBrowserSession({ onLock, onUnlock }) {
       const status = await response.json();
       if (epoch !== generation) return;
       el("browserForm").hidden = !status.vaultLogin;
+      el("browserUnlock").textContent = status.switchesToVault ? "Mit Tresor anmelden" : "Entsperren";
       el("browserHint").textContent = status.vaultLogin
-        ? "Entsperre den Tresor mit deinem Masterpasswort. Weitere Fenster dieses Browsers verwenden dieselbe Sitzung."
-        : "Öffne die sichere Startdatei aus dem Terminal. Bei eingerichteter Tresor-Anmeldung genügt danach diese lokale Adresse mit deinem Masterpasswort.";
+        ? status.switchesToVault
+          ? "Dein Tresor ist vorhanden. Mit deinem Masterpasswort wechselst du zur Tresor-Anmeldung und verwendest die darin gespeicherten Schlüssel. Wenn du bei der bestehenden AWS-Anmeldung bleiben möchtest, öffne die sichere Startdatei aus dem Terminal."
+          : "Entsperre den Tresor mit deinem Masterpasswort. Weitere Fenster dieses Browsers verwenden dieselbe Sitzung."
+        : "Hier ist noch kein Tresor eingerichtet. Öffne zur ersten Anmeldung die sichere Startdatei aus dem Terminal. Dort kannst du deinen Tresor einrichten oder die bestehende AWS-Anmeldung verwenden.";
       if (status.authenticated) {
         if (!ready) {
           ready = true;
