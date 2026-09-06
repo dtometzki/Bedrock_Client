@@ -13,7 +13,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Starts an interactive Bedrock chat in the terminal
 - Optionally serves the chat as a local web GUI with `--web` (streaming, Markdown rendering, model switching)
 - Lets you choose and switch models interactively, including arrow-key navigation in `/model` and direct switching with `/model <name>`
-- Lets you pick the adaptive-thinking effort level (`low`/`medium`/`high`, Opus also `max`) directly in the `/model` picker for reasoning models: use the left/right arrow keys to change it
+- Lets you pick the adaptive-thinking effort level (`low`/`medium`/`high`, Opus also `max`, Fable 5.1 also `xhigh`/`max`) directly in the `/model` picker for reasoning models: use the left/right arrow keys to change it
 - Stores the last selected model and effort level for the next start
 - Shows the active AWS account and region with `/account`
 - Shows current Amazon Bedrock billing costs and session token usage with `/usage`
@@ -29,7 +29,7 @@ Interactive CLI client for AWS Bedrock with model selection, command menu, forma
 - Supports AWS profile selection at startup and during the running chat
 - Supports overriding the AWS region with `-r, --region` independently of the active profile
 - Streams extended-thinking (reasoning) content dimmed before the answer, without storing it in the history
-- Lets you pick the adaptive-thinking effort level (`low`/`medium`/`high`, Opus also `max`) per reasoning model in the web GUI
+- Lets you pick the adaptive-thinking effort level (`low`/`medium`/`high`, Opus also `max`, Fable 5.1 also `xhigh`/`max`) per reasoning model in the web GUI
 - Supports configurable `maxTokens`, `temperature`, `topP` and stop sequences
 - Supports a debug mode for Bedrock request and error diagnostics
 - Supports standalone CLI usage through `bedrock-chat`
@@ -231,7 +231,7 @@ With auto-save enabled, window transcripts are stored separately in private `web
 
 For migration from the previous shared web chat, start once with `--web --resume`: the previous `last-session.json` is used only for the first browser conversation; subsequent new windows start empty. CLI resume/save behavior is unchanged. Older browser pages need a reload after updating the server so they send their window identifier.
 
-The web GUI supports streaming responses with Markdown rendering, model switching, an effort selector for reasoning models (adaptive-thinking depth `low`/`medium`/`high`, Opus also `max`; disabled for models without effort support), collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, per-response token/cost estimates, a usage panel with AWS Cost Explorer billing and session token statistics (the web equivalent of `/usage`), and file attachments via the "+" button or drag & drop (documents: pdf, csv, doc, docx, xls, xlsx, html, txt, md; images: png, jpg, gif, webp; max. 5 files, 4.5 MB each). CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
+The web GUI supports streaming responses with Markdown rendering, model switching, an effort selector for reasoning models (adaptive-thinking depth `low`/`medium`/`high`, Opus also `max`, Fable 5.1 also `xhigh`/`max`; disabled for models without effort support), collapsible reasoning output, interrupting a response (`Esc` or the stop button), clearing the history, changing the system prompt, per-response token/cost estimates, a usage panel with AWS Cost Explorer billing and session token statistics (the web equivalent of `/usage`), and file attachments via the "+" button or drag & drop (documents: pdf, csv, doc, docx, xls, xlsx, html, txt, md; images: png, jpg, gif, webp; max. 5 files, 4.5 MB each). CLI options like `--resume`, `--profile`, `--region`, `--system` and `--max-turns` apply to the web mode as well.
 
 Notes:
 
@@ -244,6 +244,8 @@ Notes:
 ## Add A Model
 
 Add new models in [`models.json`](./models.json). Each entry needs an AWS Bedrock model ID in `id`. `label` is optional, but recommended because it is shown in the interactive selection and can also be used with `-m` / `--model`.
+
+The bundled catalog includes Claude Fable 5.1 as `us.anthropic.claude-fable-5-1` (selection name `claude-fable-5-1`), alongside Fable 5. Start it with `node app_aws.js -m claude-fable-5-1 --region us-east-1`, or select it in `/model` or the web GUI after restarting. Its adaptive-thinking effort levels are `low`, `medium`, `high` (default), `xhigh`, and `max`. Temperature and Top-P overrides are omitted for this model because it only accepts fixed sampling values. The client keeps its existing history limits and default output limit of 4,096 tokens; the model supports a 1M-token context and up to 128K output tokens. See the [AWS model documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-1.html). Cost estimates use the [published Anthropic text-token rates](https://platform.claude.com/docs/en/models/fable-5-1/overview) of $10 input / $50 output per million tokens; actual AWS billing can differ.
 
 You can also keep a personal model list outside the package: if `models.json` exists in the user config directory (`~/.config/bedrock-chat/models.json`, or `$BEDROCK_CHAT_CONFIG_DIR/models.json`), it completely replaces the bundled file. This is the recommended place for account-specific entries such as `profileArn` values, so they never end up in a published package or repository.
 
@@ -283,7 +285,7 @@ Notes:
 - `pricingUsdPer1M` is optional and powers the `/usage` cost estimate. If it is omitted, the client falls back to a small built-in price table (see [`src/usage.js`](./src/usage.js), current as of 2026-06); models without a match show `n/a` instead of an estimate. Prefer setting `pricingUsdPer1M` per model so estimates stay accurate.
 - `inferenceConfig` is optional and can set Bedrock Converse parameters per model.
 - `disabledInferenceConfigFields` is optional and can omit unsupported Converse parameters for a model, for example `["temperature"]`.
-- `effort` is optional and enables the effort selector (in both the web GUI and the terminal `/model` picker) for adaptive-thinking (reasoning) models. It takes `levels` (e.g. `["low", "medium", "high"]`, Opus also `"max"`), a `default` level, and an optional `style`: omit it (or use `"thinking"`) for Claude Opus 4.6 / Sonnet 4.6, which expect `thinking.effort`; use `"style": "output_config"` for Claude Opus 4.8 / Sonnet 5 / Fable 5, which expect a separate `output_config.effort`. Models without `effort` hide/disable the selector and send no thinking fields. The chosen level is stored in `settings.json` and restored on the next start. Example: `"effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" }`.
+- `effort` is optional and enables the effort selector (in both the web GUI and the terminal `/model` picker) for adaptive-thinking (reasoning) models. It takes `levels` (e.g. `["low", "medium", "high"]`, Opus also `"max"`), a `default` level, and an optional `style`: omit it (or use `"thinking"`) for Claude Opus 4.6 / Sonnet 4.6, which expect `thinking.effort`; use `"style": "output_config"` for Claude Opus 4.8 / Sonnet 5 / Fable 5 / Fable 5.1, which expect a separate `output_config.effort`. Models without `effort` hide/disable the selector and send no thinking fields. The chosen level is stored in `settings.json` and restored on the next start. Example: `"effort": { "levels": ["low", "medium", "high"], "default": "high", "style": "output_config" }`.
 - If `label` is omitted, the CLI derives one automatically from `id`.
 - After changing [`models.json`](./models.json), restart the client.
 

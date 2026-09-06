@@ -43,7 +43,7 @@ export function formatHomePath(path) {
   return path;
 }
 
-export const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", max: "Max" };
+export const EFFORT_LABELS = { low: "Niedrig", medium: "Mittel", high: "Hoch", xhigh: "Sehr hoch", max: "Max" };
 
 export function formatEffortLabel(effort) {
   if (!effort) return "";

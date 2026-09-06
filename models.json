@@ -52,6 +52,17 @@
     ]
   },
   {
+    "id": "us.anthropic.claude-fable-5-1",
+    "label": "claude-fable-5-1",
+    "disabledInferenceConfigFields": ["temperature", "topP"],
+    "effort": { "levels": ["low", "medium", "high", "xhigh", "max"], "default": "high", "style": "output_config" },
+    "pricingUsdPer1M": {
+      "input": 10,
+      "output": 50,
+      "source": "Anthropic Fable 5.1 published text token pricing (2026-09): https://platform.claude.com/docs/en/models/fable-5-1/overview"
+    }
+  },
+  {
     "id": "minimax.minimax-m2.5",
     "label": "MiniMax M2.5",
     "pricingUsdPer1M": {
