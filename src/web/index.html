@@ -337,9 +337,23 @@
   #authModeHelp { padding: 12px; border-left: 3px solid var(--accent); background: var(--bg-input); border-radius: 6px; }
   #authErrorDetails { margin-top: 16px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 6px; }
   #authErrorDetails summary { cursor: pointer; font-weight: 600; }
+  #browserDialog { color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 12px; width: min(480px, 90vw); padding: 24px; }
+  #browserDialog::backdrop { background: #000b; }
+  #browserDialog h2 { margin-top: 0; }
+  #browserDialog input { display: block; width: 100%; box-sizing: border-box; margin: 8px 0 16px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  #browserFeedback { white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
+<dialog id="browserDialog" aria-labelledby="browserTitle">
+  <h2 id="browserTitle">Bedrock Chat entsperren</h2>
+  <p id="browserHint">Browser-Zugang wird geprüft …</p>
+  <form id="browserForm" hidden autocomplete="off">
+    <label>Masterpasswort<input id="browserPassword" type="password" autocomplete="off" maxlength="1024" required></label>
+    <button id="browserUnlock" type="submit" class="primary">Entsperren</button>
+  </form>
+  <p id="browserFeedback" role="status" aria-live="polite"></p>
+</dialog>
 <dialog id="authDialog" aria-labelledby="authTitle">
   <h2 id="authTitle">Einstellungen · AWS-Anmeldung</h2>
   <p id="authStatus" role="status"></p>

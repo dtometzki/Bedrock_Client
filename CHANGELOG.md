@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.13.0 - 2026-09-06
+
+- Replace tab-local web access tokens with revocable HttpOnly, SameSite=Strict browser sessions shared across tabs and windows. In vault mode, authenticate at the normal local URL with the master password, including when the server runs in the background.
+- Keep private startup-file authentication for initial setup and existing AWS profiles, and retain the independent control token for `--web-stop`. AWS role credentials and CLI authentication are unchanged.
+- Revoke browser access on vault lock, idle expiry and credential changes; stop in-flight responses and clear private UI state across windows. A second browser can prove the master password without invalidating existing sessions.
+- Enforce same-origin JSON requests and a custom request header for browser authentication and cookie APIs. Keep sessions in memory, remove legacy browser token storage, and add offline regression tests for cookie access, CSRF, password rotation, concurrent locking and background restart.
+
 ## 1.12.6 - 2026-08-01
 
 Security release (findings from a code review of the web GUI and the dependency tree):

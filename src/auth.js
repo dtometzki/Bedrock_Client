@@ -241,7 +241,7 @@ export class AuthService extends EventEmitter {
     this.lastActivity = this.now();
   }
 
-  async unlock(password) {
+  async unlock(password, { reuseSession = false } = {}) {
     return this.exclusive(async (epoch) => {
       if (this.now() < this.retryAt) throw new AuthError("Zu viele Entsperrversuche. Bitte kurz warten.", 429);
       let next;
@@ -249,6 +249,14 @@ export class AuthService extends EventEmitter {
         next = await this.vault.unlock(password);
         this.assertGeneration(epoch);
         if (this.vault.currentRevision() !== next.revision) throw new AuthError("Tresor wurde zwischenzeitlich geaendert. Bitte erneut entsperren.", 409);
+        // A second browser proves knowledge of the password without replacing
+        // the running vault session or logging out already authenticated browsers.
+        if (reuseSession && this.mode === "vault" && this.session?.revision === next.revision) {
+          disposeSecrets(next);
+          this.failures = 0;
+          this.retryAt = 0;
+          return this.status();
+        }
         this.saveMode("vault");
         const profiles = await this.profiles().catch(() => ({}));
         this.assertGeneration(epoch);
