@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.14.0 - 2026-09-06
+
+- Give each browser window its own conversation, model/effort selection, system prompt, usage and request cancellation. New windows start empty; reloads restore the same window through a non-secret tab identifier while the login cookie remains shared.
+- Save web transcripts in separate private files, leaving CLI history untouched. Explicit web resume seeds only the first window. Bound in-memory window conversations to 64 per server start without silent eviction.
+- Keep authentication and vault locking global: independent windows can stream concurrently, and locking cancels every active conversation. Add regression coverage for isolation, persistence, concurrent cancellation, identifier validation and reload behavior.
+
 ## 1.13.1 - 2026-09-06
 
 - Show the master-password form whenever a vault exists, including when existing AWS authentication is selected. The start page offers an explicit switch to vault authentication instead of trapping users behind the private-start-file hint. Failed authentication preserves the active mode and existing browser sessions.

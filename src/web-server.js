@@ -20,7 +20,7 @@ import {
 import { consumeConverseStream } from "./stream-consumer.js";
 import { findModel, getModelInvocationId, normalizeEffort, resolveEffortLevel } from "./models.js";
 import { appendAssistantResponse, countHistoryTurns } from "./history.js";
-import { clearSession, writeSession } from "./session.js";
+import { clearSession, writeSession, readSession, isValidChatId } from "./session.js";
 import { tryPersist, writeLastModelId, writeSavedEffort } from "./config.js";
 import { emptyUsageTotals, loadCurrentBedrockBillingCost } from "./usage.js";
 
@@ -33,6 +33,7 @@ const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
 // damit gibt es keinerlei Pfad-Traversal-Flaeche.
 const STATIC_SCRIPTS = new Map([
   ["GET /app.js", new URL("./web/app.js", import.meta.url)],
+  ["GET /window-chat.js", new URL("./web/window-chat.js", import.meta.url)],
   ["GET /browser-session.js", new URL("./web/browser-session.js", import.meta.url)],
   ["GET /auth-form.js", new URL("./web/auth-form.js", import.meta.url)],
   ["GET /auth-display.js", new URL("./auth-display.js", import.meta.url)],
@@ -416,82 +417,6 @@ export function createWebServer(options = {}) {
     return regionalClient;
   }
 
-  const state = {
-    model,
-    inferenceConfig: buildInferenceConfig(model, inferenceOverrides),
-    effort: resolveEffortLevel(model, effort),
-    preferredEffort: effort,
-    systemPrompt,
-    messages: [...initialMessages],
-    usageTotals: emptyUsageTotals(),
-    abortController: null,
-    busy: false
-  };
-
-  function persistSession() {
-    return !autoSave || writeSession(toPersistableMessages(state.messages), { modelId: state.model.id });
-  }
-
-  function getStatePayload() {
-    const authState = auth?.status();
-    return {
-      ...(authState && { auth: authState }),
-      models: models.map((entry) => ({
-        id: entry.id,
-        label: entry.label,
-        effort: normalizeEffort(entry)
-      })),
-      modelId: state.model.id,
-      modelLabel: state.model.label,
-      effort: state.effort,
-      region: authState?.region ?? region,
-      identityLabel: authState?.identityLabel ?? identityLabel,
-      profile: authState?.profile ?? profile,
-      systemPrompt: state.systemPrompt,
-      maxTurns,
-      busy: state.busy,
-      turns: countHistoryTurns(state.messages),
-      messages: toPublicMessages(state.messages),
-      usage: {
-        requests: state.usageTotals.requests,
-        inputTokens: state.usageTotals.inputTokens,
-        outputTokens: state.usageTotals.outputTokens,
-        totalTokens: state.usageTotals.totalTokens,
-        costUsd: state.usageTotals.costUsd
-      }
-    };
-  }
-
-  async function handleUsage(res) {
-    const controller = new AbortController();
-    const onClose = () => controller.abort();
-    res.once("close", onClose);
-    let billing;
-    try { billing = await billingFn({ auth, abortSignal: controller.signal }).catch((err) => ({ error: safeAwsError(err) })); }
-    finally { res.off("close", onClose); }
-    if (res.destroyed) return;
-    sendJson(res, 200, {
-      billing,
-      session: {
-        requests: state.usageTotals.requests,
-        inputTokens: state.usageTotals.inputTokens,
-        outputTokens: state.usageTotals.outputTokens,
-        totalTokens: state.usageTotals.totalTokens,
-        costUsd: state.usageTotals.costUsd,
-        last: toPublicUsageRecord(state.usageTotals.last),
-        byModel: [...state.usageTotals.byModel.entries()].map(([modelLabel, totals]) => ({
-          modelLabel,
-          requests: totals.requests,
-          inputTokens: totals.inputTokens,
-          outputTokens: totals.outputTokens,
-          totalTokens: totals.totalTokens,
-          costUsd: totals.costUsd,
-          hasUnknownCost: totals.hasUnknownCost
-        }))
-      }
-    });
-  }
-
   // Die statischen Dateien aendern sich zur Laufzeit nicht; einmal lesen
   // statt bei jedem Reload synchron von der Platte.
   const staticFileCache = new Map();
@@ -538,229 +463,347 @@ export function createWebServer(options = {}) {
     res.end(script);
   }
 
-  function handleAbort(res) {
-    if (state.abortController) {
-      state.abortController.abort();
-    }
-    sendJson(res, 200, { ok: true, busy: state.busy });
-  }
+  function createConversation(messages = [], chatId = null) {
+    const saved = chatId && autoSave ? readSession({ chatId }) : null;
+    const initialModel = findModel(models, saved?.modelId) || model;
+    const state = {
+      model: initialModel,
+      inferenceConfig: buildInferenceConfig(initialModel, inferenceOverrides),
+      effort: resolveEffortLevel(initialModel, effort),
+      preferredEffort: effort,
+      systemPrompt,
+      messages: [...(saved?.savedAt ? saved.messages : messages)],
+      usageTotals: emptyUsageTotals(),
+      abortController: null,
+      busy: false
+    };
 
-  function handleClear(res) {
-    if (state.busy) {
-      sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
-      return;
+    function persistSession() {
+      return !autoSave || writeSession(toPersistableMessages(state.messages), { modelId: state.model.id, chatId });
     }
-    if (autoSave && !clearSession()) {
-      sendJson(res, 500, { error: "Gespeicherter Verlauf konnte nicht geloescht werden. Der Verlauf wurde beibehalten." });
-      return;
-    }
-    state.messages = [];
-    sendJson(res, 200, getStatePayload());
-  }
 
-  async function handleModelSwitch(req, res) {
-    // Body zuerst lesen, dann busy pruefen: Waehrend des await koennte eine
-    // Chat-Anfrage starten; der Check danach verhindert Wechsel mid-stream.
-    const body = await readJsonBody(req);
-    if (state.busy) {
-      sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
-      return;
-    }
-    const requested = String(body?.model ?? "").trim();
-    const selected = findModel(models, requested);
-    if (!selected) {
-      sendJson(res, 404, { error: `Modell nicht gefunden: ${requested}` });
-      return;
-    }
-    state.model = selected;
-    state.inferenceConfig = buildInferenceConfig(selected, inferenceOverrides);
-    state.effort = resolveEffortLevel(selected, state.preferredEffort);
-    if (persistModelSelection) {
-      tryPersistWeb(() => writeLastModelId(selected.id), "Modell speichern");
-    }
-    sendJson(res, 200, getStatePayload());
-  }
-
-  async function handleEffort(req, res) {
-    // Body zuerst lesen, dann busy pruefen (siehe handleModelSwitch).
-    const body = await readJsonBody(req);
-    if (state.busy) {
-      sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
-      return;
-    }
-    const effortConfig = normalizeEffort(state.model);
-    if (!effortConfig) {
-      sendJson(res, 400, { error: "Aktuelles Modell unterstuetzt kein Effort Level." });
-      return;
-    }
-    const requested = String(body?.effort ?? "").trim();
-    if (!effortConfig.levels.includes(requested)) {
-      sendJson(res, 400, { error: `Ungueltiges Effort Level: ${requested}` });
-      return;
-    }
-    state.effort = requested;
-    state.preferredEffort = requested;
-    if (persistEffortSelection) {
-      tryPersistWeb(() => writeSavedEffort(requested), "Effort speichern");
-    }
-    sendJson(res, 200, getStatePayload());
-  }
-
-  async function handleSystemPrompt(req, res) {
-    // Body zuerst lesen, dann busy pruefen (siehe handleModelSwitch).
-    const body = await readJsonBody(req);
-    if (state.busy) {
-      sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
-      return;
-    }
-    state.systemPrompt = String(body?.system ?? "").trim();
-    sendJson(res, 200, getStatePayload());
-  }
-
-  async function handleChat(req, res) {
-    if (state.busy) {
-      sendJson(res, 409, { error: "Es laeuft bereits eine Anfrage." });
-      return;
-    }
-    // busy sofort (synchron) setzen: Der Body-Read unten ist ein await, und
-    // eine zweite parallele Anfrage wuerde sonst den busy-Check ebenfalls
-    // passieren und gleichzeitig streamen (Race auf state.messages/abortController).
-    state.busy = true;
-    let authOperation;
-
-    // Auch Validierung und Vorbereitung muessen busy bei jedem Fehler freigeben.
-    try {
-      state.abortController = new AbortController();
-      authOperation = auth?.begin({ signal: state.abortController.signal });
-      let body;
-      try {
-        body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
-      } catch (err) {
-        sendJson(res, 400, { error: err.message });
-        return;
-      }
-
-      if (!body || typeof body !== "object" || Array.isArray(body) ||
-          (body.message !== undefined && typeof body.message !== "string")) {
-        sendJson(res, 400, { error: "Nachricht muss ein JSON-Objekt mit optionalem Textfeld message sein." });
-        return;
-      }
-      const message = (body.message ?? "").trim();
-      const attachmentResult = buildAttachmentBlocks(body.attachments);
-      if (attachmentResult.error) {
-        sendJson(res, 400, { error: attachmentResult.error });
-        return;
-      }
-      if (!message && !attachmentResult.blocks.length) {
-        sendJson(res, 400, { error: "Leere Nachricht." });
-        return;
-      }
-
-      if (auth) auth.assertGeneration(authOperation.epoch);
-      const invocationClient = await resolveInvocationClient(getModelInvocationId(state.model));
-      if (auth) auth.assertGeneration(authOperation.epoch);
-      const abortController = state.abortController;
-      const abortSignal = authOperation ? combineAbortSignals([abortController.signal, authOperation.signal]) : abortController.signal;
-      state.abortController = abortController;
-
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-store",
-        Connection: "keep-alive"
-      });
-      // Nach einem Client-Disconnect ist die Response beendet; weitere Writes
-      // wuerden fehlschlagen. Der Guard verwirft solche Events still.
-      const send = (event) => {
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify(event)}\n\n`);
+    function getStatePayload() {
+      const authState = auth?.status();
+      return {
+        ...(authState && { auth: authState }),
+        models: models.map((entry) => ({
+          id: entry.id,
+          label: entry.label,
+          effort: normalizeEffort(entry)
+        })),
+        modelId: state.model.id,
+        modelLabel: state.model.label,
+        effort: state.effort,
+        region: authState?.region ?? region,
+        identityLabel: authState?.identityLabel ?? identityLabel,
+        profile: authState?.profile ?? profile,
+        systemPrompt: state.systemPrompt,
+        maxTurns,
+        busy: state.busy,
+        turns: countHistoryTurns(state.messages),
+        messages: toPublicMessages(state.messages),
+        usage: {
+          requests: state.usageTotals.requests,
+          inputTokens: state.usageTotals.inputTokens,
+          outputTokens: state.usageTotals.outputTokens,
+          totalTokens: state.usageTotals.totalTokens,
+          costUsd: state.usageTotals.costUsd
         }
       };
-      res.on("close", () => {
-        if (state.busy && state.abortController === abortController) {
-          abortController.abort();
+    }
+
+    async function handleUsage(res) {
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      res.once("close", onClose);
+      let billing;
+      try { billing = await billingFn({ auth, abortSignal: controller.signal }).catch((err) => ({ error: safeAwsError(err) })); }
+      finally { res.off("close", onClose); }
+      if (res.destroyed) return;
+      sendJson(res, 200, {
+        billing,
+        session: {
+          requests: state.usageTotals.requests,
+          inputTokens: state.usageTotals.inputTokens,
+          outputTokens: state.usageTotals.outputTokens,
+          totalTokens: state.usageTotals.totalTokens,
+          costUsd: state.usageTotals.costUsd,
+          last: toPublicUsageRecord(state.usageTotals.last),
+          byModel: [...state.usageTotals.byModel.entries()].map(([modelLabel, totals]) => ({
+            modelLabel,
+            requests: totals.requests,
+            inputTokens: totals.inputTokens,
+            outputTokens: totals.outputTokens,
+            totalTokens: totals.totalTokens,
+            costUsd: totals.costUsd,
+            hasUnknownCost: totals.hasUnknownCost
+          }))
         }
       });
+    }
 
-      const userMessage = {
-        role: "user",
-        content: [
-          ...(message ? [{ text: message }] : []),
-          ...attachmentResult.blocks
-        ],
-        ...(attachmentResult.displayNames.length && { attachmentNames: attachmentResult.displayNames })
-      };
-      const requestMessages = [...state.messages, userMessage];
+    function handleAbort(res) {
+      if (state.abortController) {
+        state.abortController.abort();
+      }
+      sendJson(res, 200, { ok: true, busy: state.busy });
+    }
 
+    function handleClear(res) {
+      if (state.busy) {
+        sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
+        return;
+      }
+      if (autoSave && !clearSession({ chatId })) {
+        sendJson(res, 500, { error: "Gespeicherter Verlauf konnte nicht geloescht werden. Der Verlauf wurde beibehalten." });
+        return;
+      }
+      state.messages = [];
+      sendJson(res, 200, getStatePayload());
+    }
+
+    async function handleModelSwitch(req, res) {
+      // Body zuerst lesen, dann busy pruefen: Waehrend des await koennte eine
+      // Chat-Anfrage starten; der Check danach verhindert Wechsel mid-stream.
+      const body = await readJsonBody(req);
+      if (state.busy) {
+        sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
+        return;
+      }
+      const requested = String(body?.model ?? "").trim();
+      const selected = findModel(models, requested);
+      if (!selected) {
+        sendJson(res, 404, { error: `Modell nicht gefunden: ${requested}` });
+        return;
+      }
+      state.model = selected;
+      state.inferenceConfig = buildInferenceConfig(selected, inferenceOverrides);
+      state.effort = resolveEffortLevel(selected, state.preferredEffort);
+      if (persistModelSelection) {
+        tryPersistWeb(() => writeLastModelId(selected.id), "Modell speichern");
+      }
+      sendJson(res, 200, getStatePayload());
+    }
+
+    async function handleEffort(req, res) {
+      // Body zuerst lesen, dann busy pruefen (siehe handleModelSwitch).
+      const body = await readJsonBody(req);
+      if (state.busy) {
+        sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
+        return;
+      }
       const effortConfig = normalizeEffort(state.model);
-      const invocationModelId = getModelInvocationId(state.model);
+      if (!effortConfig) {
+        sendJson(res, 400, { error: "Aktuelles Modell unterstuetzt kein Effort Level." });
+        return;
+      }
+      const requested = String(body?.effort ?? "").trim();
+      if (!effortConfig.levels.includes(requested)) {
+        sendJson(res, 400, { error: `Ungueltiges Effort Level: ${requested}` });
+        return;
+      }
+      state.effort = requested;
+      state.preferredEffort = requested;
+      if (persistEffortSelection) {
+        tryPersistWeb(() => writeSavedEffort(requested), "Effort speichern");
+      }
+      sendJson(res, 200, getStatePayload());
+    }
 
-      const { fullResponse, usageRecord, aborted, error } = await consumeConverseStream(
-        streamFn(invocationClient, {
-          modelId: invocationModelId,
-          messages: toBedrockMessages(requestMessages),
-          system: state.systemPrompt || undefined,
-          inferenceConfig: state.inferenceConfig,
-          additionalModelRequestFields: effortConfig
-            ? buildAdaptiveThinkingFields(state.effort, effortConfig.style)
-            : undefined,
-          abortSignal
-        }),
-        {
-          usageTotals: state.usageTotals,
-          model: state.model,
-          abortSignal,
-          onRetry: (event) => {
-            send({
-              type: "retry",
-              attempt: event.attempt,
-              maxRetries: event.maxRetries,
-              delayMs: Math.round(event.delayMs),
-              message: auth?.mode === "vault" ? safeAwsError(event.error) : formatBedrockErrorMessage(event.error)
-            });
-          },
-          onReasoning: (text) => {
-            send({ type: "reasoning", text });
-          },
-          onText: (text) => {
-            send({ type: "text", text });
+    async function handleSystemPrompt(req, res) {
+      // Body zuerst lesen, dann busy pruefen (siehe handleModelSwitch).
+      const body = await readJsonBody(req);
+      if (state.busy) {
+        sendJson(res, 409, { error: "Anfrage laeuft noch. Erst abbrechen." });
+        return;
+      }
+      state.systemPrompt = String(body?.system ?? "").trim();
+      sendJson(res, 200, getStatePayload());
+    }
+
+    async function handleChat(req, res) {
+      if (state.busy) {
+        sendJson(res, 409, { error: "Es laeuft bereits eine Anfrage." });
+        return;
+      }
+      // busy sofort (synchron) setzen: Der Body-Read unten ist ein await, und
+      // eine zweite parallele Anfrage wuerde sonst den busy-Check ebenfalls
+      // passieren und gleichzeitig streamen (Race auf state.messages/abortController).
+      state.busy = true;
+      let authOperation;
+
+      // Auch Validierung und Vorbereitung muessen busy bei jedem Fehler freigeben.
+      try {
+        state.abortController = new AbortController();
+        authOperation = auth?.begin({ signal: state.abortController.signal });
+        let body;
+        try {
+          body = await readJsonBody(req, { limit: MAX_CHAT_BODY_BYTES });
+        } catch (err) {
+          sendJson(res, 400, { error: err.message });
+          return;
+        }
+
+        if (!body || typeof body !== "object" || Array.isArray(body) ||
+            (body.message !== undefined && typeof body.message !== "string")) {
+          sendJson(res, 400, { error: "Nachricht muss ein JSON-Objekt mit optionalem Textfeld message sein." });
+          return;
+        }
+        const message = (body.message ?? "").trim();
+        const attachmentResult = buildAttachmentBlocks(body.attachments);
+        if (attachmentResult.error) {
+          sendJson(res, 400, { error: attachmentResult.error });
+          return;
+        }
+        if (!message && !attachmentResult.blocks.length) {
+          sendJson(res, 400, { error: "Leere Nachricht." });
+          return;
+        }
+
+        if (auth) auth.assertGeneration(authOperation.epoch);
+        const invocationClient = await resolveInvocationClient(getModelInvocationId(state.model));
+        if (auth) auth.assertGeneration(authOperation.epoch);
+        const abortController = state.abortController;
+        const abortSignal = authOperation ? combineAbortSignals([abortController.signal, authOperation.signal]) : abortController.signal;
+        state.abortController = abortController;
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-store",
+          Connection: "keep-alive"
+        });
+        // Nach einem Client-Disconnect ist die Response beendet; weitere Writes
+        // wuerden fehlschlagen. Der Guard verwirft solche Events still.
+        const send = (event) => {
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+        };
+        res.on("close", () => {
+          if (state.busy && state.abortController === abortController) {
+            abortController.abort();
+          }
+        });
+
+        const userMessage = {
+          role: "user",
+          content: [
+            ...(message ? [{ text: message }] : []),
+            ...attachmentResult.blocks
+          ],
+          ...(attachmentResult.displayNames.length && { attachmentNames: attachmentResult.displayNames })
+        };
+        const requestMessages = [...state.messages, userMessage];
+
+        const effortConfig = normalizeEffort(state.model);
+        const invocationModelId = getModelInvocationId(state.model);
+
+        const { fullResponse, usageRecord, aborted, error } = await consumeConverseStream(
+          streamFn(invocationClient, {
+            modelId: invocationModelId,
+            messages: toBedrockMessages(requestMessages),
+            system: state.systemPrompt || undefined,
+            inferenceConfig: state.inferenceConfig,
+            additionalModelRequestFields: effortConfig
+              ? buildAdaptiveThinkingFields(state.effort, effortConfig.style)
+              : undefined,
+            abortSignal
+          }),
+          {
+            usageTotals: state.usageTotals,
+            model: state.model,
+            abortSignal,
+            onRetry: (event) => {
+              send({
+                type: "retry",
+                attempt: event.attempt,
+                maxRetries: event.maxRetries,
+                delayMs: Math.round(event.delayMs),
+                message: auth?.mode === "vault" ? safeAwsError(event.error) : formatBedrockErrorMessage(event.error)
+              });
+            },
+            onReasoning: (text) => {
+              send({ type: "reasoning", text });
+            },
+            onText: (text) => {
+              send({ type: "text", text });
+            }
+          }
+        );
+        const failed = Boolean(error);
+        if (failed) {
+          send({ type: "error", message: auth?.mode === "vault" ? safeAwsError(error) : formatBedrockErrorMessage(error) });
+        }
+
+        let warning = "";
+        if (!failed && fullResponse) {
+          state.messages = limitAttachmentHistory(
+            appendAssistantResponse(requestMessages, fullResponse, { aborted, maxTurns })
+          );
+          if (!persistSession()) {
+            warning = "Verlauf konnte nicht gespeichert werden. Neue Nachrichten sind nur in dieser Sitzung verfuegbar.";
           }
         }
-      );
-      const failed = Boolean(error);
-      if (failed) {
-        send({ type: "error", message: auth?.mode === "vault" ? safeAwsError(error) : formatBedrockErrorMessage(error) });
-      }
 
-      let warning = "";
-      if (!failed && fullResponse) {
-        state.messages = limitAttachmentHistory(
-          appendAssistantResponse(requestMessages, fullResponse, { aborted, maxTurns })
-        );
-        if (!persistSession()) {
-          warning = "Verlauf konnte nicht gespeichert werden. Neue Nachrichten sind nur in dieser Sitzung verfuegbar.";
+        send({
+          type: "done",
+          aborted,
+          failed,
+          ...(warning && { warning }),
+          usage: toPublicUsageRecord(usageRecord)
+        });
+        if (!res.writableEnded) {
+          res.end();
         }
+      } finally {
+        authOperation?.finish();
+        state.busy = false;
+        state.abortController = null;
       }
-
-      send({
-        type: "done",
-        aborted,
-        failed,
-        ...(warning && { warning }),
-        usage: toPublicUsageRecord(usageRecord)
-      });
-      if (!res.writableEnded) {
-        res.end();
-      }
-    } finally {
-      authOperation?.finish();
-      state.busy = false;
-      state.abortController = null;
     }
+
+    return {
+      getState: getStatePayload,
+      isBusy: () => state.busy,
+      abort: () => state.abortController?.abort(),
+      routes: new Map([
+        ["GET /api/state", (_req, res) => sendJson(res, 200, getStatePayload())],
+        ["GET /api/usage", (_req, res) => handleUsage(res)],
+        ["POST /api/chat", handleChat],
+        ["POST /api/abort", (_req, res) => handleAbort(res)],
+        ["POST /api/clear", (_req, res) => handleClear(res)],
+        ["POST /api/model", handleModelSwitch],
+        ["POST /api/effort", handleEffort],
+        ["POST /api/system", handleSystemPrompt]
+      ])
+    };
+  }
+
+  // Header-token clients retain the original single-chat API. Browser windows
+  // must identify their own conversation; a cookie alone never selects a chat.
+  const legacyChat = createConversation(initialMessages);
+  const conversations = new Map();
+  let resumeClaimed = false;
+  const allConversations = () => [legacyChat, ...conversations.values()];
+  function conversationFor(req) {
+    const chatId = req.headers["x-bedrock-chat"];
+    if (chatId === undefined && !req.browserSession) return legacyChat;
+    if (!isValidChatId(chatId)) throw new AuthError("Ungueltige oder fehlende Fenster-Chat-ID. Bitte Seite neu laden.", 400);
+    let conversation = conversations.get(chatId);
+    if (!conversation) {
+      if (conversations.size >= 64) throw new AuthError("Maximal 64 Fenster-Chats pro Serverstart. Bitte Server neu starten.", 429);
+      // Explicit --resume seeds only the first browser conversation, never every
+      // newly opened window. Existing per-window saves take precedence.
+      conversation = createConversation(resumeClaimed ? [] : initialMessages, chatId);
+      resumeClaimed = true;
+      conversations.set(chatId, conversation);
+    }
+    return conversation;
   }
 
   const onAuthChange = () => {
     browserSessions.revokeAll();
-    state.abortController?.abort();
+    for (const conversation of allConversations()) conversation.abort();
     regionalClients.clear();
   };
   auth?.on("change", onAuthChange);
@@ -785,7 +828,7 @@ export function createWebServer(options = {}) {
       throw new AuthError("Ungueltige Felder in AWS-Einstellungen.");
     }
     // Reserve mutations against chat body preparation as well as AWS calls.
-    if (state.busy && !["lock", "activity"].includes(action)) throw new AuthError("Chat-Anfrage laeuft noch. Erst abbrechen.", 409);
+    if (allConversations().some((conversation) => conversation.isBusy()) && !["lock", "activity"].includes(action)) throw new AuthError("Chat-Anfrage laeuft noch. Erst abbrechen.", 409);
     try {
       const data = () => ({ accessKeyId: body.accessKeyId, secretAccessKey: body.secretAccessKey, profile: body.profile });
       if (action === "setup") await auth.setup(data(), body.password, body.confirmation);
@@ -856,14 +899,9 @@ export function createWebServer(options = {}) {
       route,
       (_req, res) => handleStaticScript(res, route)
     ]),
-    ["GET /api/state", (_req, res) => sendJson(res, 200, getStatePayload())],
-    ["GET /api/usage", (_req, res) => handleUsage(res)],
-    ["POST /api/chat", handleChat],
-    ["POST /api/abort", (_req, res) => handleAbort(res)],
-    ["POST /api/clear", (_req, res) => handleClear(res)],
-    ["POST /api/model", handleModelSwitch],
-    ["POST /api/effort", handleEffort],
-    ["POST /api/system", handleSystemPrompt]
+    ...[...legacyChat.routes.keys()].map((route) => [route,
+      (req, res) => conversationFor(req).routes.get(route)(req, res)
+    ])
   ]);
 
   const server = http.createServer((req, res) => {
@@ -929,6 +967,7 @@ export function createWebServer(options = {}) {
   server.on("close", () => {
     auth?.off("change", onAuthChange);
     browserSessions.revokeAll();
+    for (const conversation of allConversations()) conversation.abort();
     for (const regionalClient of regionalClients.values()) {
       regionalClient?.destroy?.();
     }
@@ -939,7 +978,7 @@ export function createWebServer(options = {}) {
   // Ohne Timeout koennte ein langsamer Client die Verbindung unbegrenzt halten.
   server.requestTimeout = 60_000;
 
-  return { server, getState: getStatePayload };
+  return { server, getState: legacyChat.getState };
 }
 
 export function getBrowserOpenCommand(url, platform = process.platform) {

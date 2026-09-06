@@ -145,7 +145,7 @@ test("background vault uses the normal URL and forgets browser sessions on resta
   assert.ok(plain.includes(`Im Browser öffnen: ${url}`));
   assert.ok(!plain.includes("Sichere Startdatei:"));
   assert.ok(!plain.includes(password));
-  const headers = { Origin: url, "x-bedrock-request": "1", "Content-Type": "application/json" };
+  const headers = { Origin: url, "x-bedrock-request": "1", "Content-Type": "application/json", "x-bedrock-chat": "00000000-0000-4000-8000-000000000001" };
   const login = await fetch(url + "/api/browser/unlock", { method: "POST", headers, body: JSON.stringify({ password }) });
   assert.equal(login.status, 200);
   const cookie = login.headers.get("set-cookie").split(";")[0];
