@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { CredentialVault, disposeSecrets } from "../src/credential-vault.js";
 import { launchWebBackground, backgroundStopCommand } from "../src/web-background.js";
 
 const exec = promisify(execFile);
@@ -119,4 +120,40 @@ test("timeout and spawn failure cancel only the newly spawned child", async () =
 
 test("stop command needs no remembered process ID", () => {
   assert.equal(backgroundStopCommand(), "./app_aws.js --web-stop");
+});
+
+
+test("background vault uses the normal URL and forgets browser sessions on restart", { timeout: 20000 }, async (t) => {
+  const env = environment(t);
+  const password = "offline-background-passphrase";
+  const vault = new CredentialVault(env.BEDROCK_CHAT_CONFIG_DIR);
+  const prepared = await vault.prepare({ accessKeyId: "AKIAEXAMPLEONLY000001", secretAccessKey: "s".repeat(40), profile: "test" }, password);
+  try { vault.save(prepared, null); } finally { disposeSecrets(prepared); }
+  env.AWS_CONFIG_FILE = path.join(env.BEDROCK_CHAT_CONFIG_DIR, "aws-config");
+  env.AWS_SHARED_CREDENTIALS_FILE = path.join(env.BEDROCK_CHAT_CONFIG_DIR, "aws-credentials");
+  fs.writeFileSync(env.AWS_CONFIG_FILE, "[profile test]\nregion=eu-west-1\n", { mode: 0o600 });
+  fs.writeFileSync(env.AWS_SHARED_CREDENTIALS_FILE, "", { mode: 0o600 });
+  const reserved = await listener();
+  const port = reserved.port;
+  await reserved.close();
+  const url = `http://127.0.0.1:${port}`;
+  const args = [entrypoint, "--web", "--background", "--no-open", "--no-save", "--auth", "vault", "--port", String(port)];
+  const stop = () => exec(process.execPath, [entrypoint, "--web-stop", "--port", String(port)], { env, timeout: 10000 });
+  t.after(async () => { try { await stop(); } catch {} });
+  const started = await exec(process.execPath, args, { env, timeout: 10000 });
+  const plain = started.stdout.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(plain.includes(`Im Browser öffnen: ${url}`));
+  assert.ok(!plain.includes("Sichere Startdatei:"));
+  assert.ok(!plain.includes(password));
+  const headers = { Origin: url, "x-bedrock-request": "1", "Content-Type": "application/json" };
+  const login = await fetch(url + "/api/browser/unlock", { method: "POST", headers, body: JSON.stringify({ password }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  assert.equal((await fetch(url + "/api/state", { headers: { ...headers, Cookie: cookie } })).status, 200);
+  await stop();
+  await exec(process.execPath, args, { env, timeout: 10000 });
+  assert.equal((await fetch(url + "/api/state", { headers: { ...headers, Cookie: cookie } })).status, 403);
+  const state = await fetch(url + "/api/browser/status", { headers }).then((res) => res.json());
+  assert.deepEqual(state, { authenticated: false, vaultLogin: true });
+  await stop();
 });

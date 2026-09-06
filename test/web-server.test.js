@@ -649,7 +649,7 @@ test("GET / setzt eine strikte Content-Security-Policy ohne unsafe-inline-Skript
 
 test("GET /app.js und /vendor-Skripte werden lokal ausgeliefert", async () => {
   await withServer({}, async ({ url }) => {
-    for (const route of ["/app.js", "/auth-form.js", "/auth-display.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+    for (const route of ["/app.js", "/browser-session.js", "/auth-form.js", "/auth-display.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
       const response = await fetch(`${url}${route}`);
       assert.equal(response.status, 200, `${route} sollte 200 liefern`);
       assert.match(response.headers.get("content-type"), /text\/javascript/);
@@ -669,8 +669,10 @@ test("GET /app.js und /vendor-Skripte werden lokal ausgeliefert", async () => {
     assert.ok(!allowedAttrs.includes("style"));
     assert.match(app, /ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS/);
     assert.match(app, /ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTRS/);
-    assert.match(app, /location\.hash/);
-    assert.match(app, /cleanUrl\.hash = ""/);
+    const access = await fetch(`${url}/browser-session.js`).then((res) => res.text());
+    assert.match(access, /location\.hash/);
+    assert.match(access, /clean\.hash = ""/);
+    assert.ok(!access.includes("sessionStorage.setItem"));
 
     const purify = await fetch(`${url}/vendor/purify.min.js`).then((res) => res.text());
     // DOMPurify muss eine Version mit dem Fix fuer CVE-2026-0540 sein
@@ -1005,7 +1007,7 @@ test("startWebServer erzeugt Token und blockt Requests ohne Token", async () => 
     // erreichbar: die Index-Seite fuer den Reload nach dem Entfernen des Tokens
     // aus der URL, die Skripte, weil <script src> keinen Token-Header mitsendet.
     // Alle API-Routen verlangen weiterhin das Token.
-    for (const route of ["/", "/app.js", "/auth-form.js", "/auth-display.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+    for (const route of ["/", "/app.js", "/browser-session.js", "/auth-form.js", "/auth-display.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
       const withoutToken = await fetch(`${url}${route}`);
       assert.notEqual(withoutToken.status, 403, `${route} sollte ohne Token erreichbar sein`);
     }

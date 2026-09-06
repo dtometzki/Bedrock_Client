@@ -1,3 +1,4 @@
+import { BrowserSessions, isBrowserRequest } from "./browser-sessions.js";
 import { combineAbortSignals } from "./abort-signals.js";
 import { AuthError } from "./credential-vault.js";
 import { safeAwsError } from "./auth.js";
@@ -32,19 +33,16 @@ const INDEX_HTML_URL = new URL("./web/index.html", import.meta.url);
 // damit gibt es keinerlei Pfad-Traversal-Flaeche.
 const STATIC_SCRIPTS = new Map([
   ["GET /app.js", new URL("./web/app.js", import.meta.url)],
+  ["GET /browser-session.js", new URL("./web/browser-session.js", import.meta.url)],
   ["GET /auth-form.js", new URL("./web/auth-form.js", import.meta.url)],
   ["GET /auth-display.js", new URL("./auth-display.js", import.meta.url)],
   ["GET /vendor/marked.min.js", new URL("./web/vendor/marked.min.js", import.meta.url)],
   ["GET /vendor/purify.min.js", new URL("./web/vendor/purify.min.js", import.meta.url)]
 ]);
 
-// Routen ohne Token-Pflicht: statisches HTML/JS ohne Geheimnisse. Die
-// Index-Seite muss ohne Token laden koennen (Browser-Reload, nachdem die GUI
-// das Token aus der URL entfernt und in sessionStorage uebernommen hat), und
-// die Script-Tags der Seite senden den Token-Header prinzipbedingt nicht mit.
-// Alle API-Routen, die Kosten verursachen oder Verlauf preisgeben, verlangen
-// weiterhin das Token.
-const PUBLIC_ROUTES = new Set(["GET /", ...STATIC_SCRIPTS.keys()]);
+// Only static assets and the minimal browser authentication handshake are public.
+const PUBLIC_ROUTES = new Set(["GET /", ...STATIC_SCRIPTS.keys(),
+  "GET /api/browser/status", "POST /api/browser/connect", "POST /api/browser/unlock"]);
 
 // Einzige Quelle der Content-Security-Policy (index.html setzt bewusst kein
 // Meta-Tag mehr: zwei Policies werden beide durchgesetzt und blockieren sich
@@ -189,7 +187,7 @@ export function isRequestAllowed(req) {
   const origin = req.headers?.origin;
   if (origin) {
     try {
-      if (new URL(origin).host !== hostHeader) {
+      if (new URL(origin).origin !== `http://${hostHeader}`) {
         return false;
       }
     } catch {
@@ -200,11 +198,8 @@ export function isRequestAllowed(req) {
   return true;
 }
 
-// Liest das Auth-Token ausschliesslich aus dem x-bedrock-token-Header.
-// Der ?token=-Query-Parameter wird serverseitig bewusst NICHT akzeptiert:
-// Tokens in URLs landen in Logs und Verlaeufen. Die GUI liest das Token beim
-// ersten Laden clientseitig aus der URL (die Index-Seite ist ohne Token
-// erreichbar, siehe PUBLIC_ROUTES) und sendet es danach nur noch als Header.
+// The private startup/control token remains available to the launcher and CLI.
+// Browser requests use their own revocable cookie after the initial handshake.
 function getRequestToken(req) {
   const header = req.headers?.["x-bedrock-token"];
   return header ? String(header) : "";
@@ -246,9 +241,10 @@ export function readJsonBody(req, { limit = MAX_BODY_BYTES } = {}) {
       if (failed) return;
       let body;
       try {
+        req.checkBrowserSession?.();
         body = Buffer.concat(chunks);
         resolve(body.length ? JSON.parse(body.toString("utf8")) : {});
-      } catch { reject(new AuthError("Ungueltiges JSON im Request Body.")); }
+      } catch (err) { reject(err instanceof AuthError ? err : new AuthError("Ungueltiges JSON im Request Body.")); }
       finally { body?.fill(0); clear(); }
     });
     req.on("aborted", () => { failed = true; clear(); reject(new AuthError("Anfrage abgebrochen.")); });
@@ -399,6 +395,7 @@ export function createWebServer(options = {}) {
   // im Web-GUI gewechselt werden, daher wird der passende Client anhand der
   // modelId aufgeloest: die Umgebungsregion nutzt den uebergebenen Client, davon
   // abweichende ARN-Regionen bekommen einen eigenen, zwischengespeicherten Client.
+  const browserSessions = new BrowserSessions();
   const regionalClients = new Map();
   async function resolveInvocationClient(modelId) {
     if (auth) {
@@ -668,7 +665,7 @@ export function createWebServer(options = {}) {
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-store",
         Connection: "keep-alive"
       });
       // Nach einem Client-Disconnect ist die Response beendet; weitere Writes
@@ -762,6 +759,7 @@ export function createWebServer(options = {}) {
   }
 
   const onAuthChange = () => {
+    browserSessions.revokeAll();
     state.abortController?.abort();
     regionalClients.clear();
   };
@@ -800,6 +798,10 @@ export function createWebServer(options = {}) {
       else if (action === "profile") await auth.changeProfile(body.profile);
       else if (action === "check") await auth.checkConnection();
       else if (action === "activity") auth.touch();
+      if (req.browserSession && !req.browserSession.valid) {
+        if (!["lock", "delete"].includes(action) && auth.status().ready) browserSessions.issue(req, res);
+        else browserSessions.clearCookie(req, res);
+      }
       sendJson(res, 200, auth.status());
     } finally {
       for (const key of Object.keys(body)) body[key] = "";
@@ -807,6 +809,30 @@ export function createWebServer(options = {}) {
   }
 
   const routes = new Map([
+    ["GET /api/browser/status", (req, res) => {
+      const status = auth?.status(); // Checks idle expiry before reading the cookie.
+      sendJson(res, 200, { authenticated: !authToken || Boolean(browserSessions.get(req)),
+        vaultLogin: Boolean(status?.exists && status.mode === "vault") });
+    }],
+    ["POST /api/browser/connect", async (req, res) => {
+      if (!authToken || !isTokenValid(req, authToken)) throw new AuthError("Sichere Startdatei erforderlich.", 403);
+      const body = await readJsonBody(req, { limit: 64 });
+      if (!body || Array.isArray(body) || typeof body !== "object" || Object.keys(body).length) throw new AuthError("Ungueltige Anmeldung.");
+      if (auth?.status().mode === "vault" && auth.status().exists) throw new AuthError("Bitte mit dem Masterpasswort entsperren.", 423);
+      browserSessions.issue(req, res);
+      sendJson(res, 200, { authenticated: true });
+    }],
+    ["POST /api/browser/unlock", async (req, res) => {
+      if (!auth || auth.mode !== "vault" || !auth.status().exists) throw new AuthError("Sichere Startdatei erforderlich.", 403);
+      const body = await readJsonBody(req, { limit: 8192 });
+      if (!body || Array.isArray(body) || typeof body !== "object" || Object.keys(body).length !== 1 ||
+          typeof body.password !== "string" || !body.password || Buffer.byteLength(body.password) > 1024) throw new AuthError("Masterpasswort erforderlich.");
+      try {
+        await auth.unlock(body.password, { reuseSession: true });
+        browserSessions.issue(req, res);
+        sendJson(res, 200, { authenticated: true });
+      } finally { body.password = ""; }
+    }],
     ["POST /api/server/stop", async (req, res) => {
       if (!options.prepareShutdown || !authToken) throw new AuthError("Kein geschuetzter Hintergrundserver.", 404);
       const body = await readJsonBody(req, { limit: 64 });
@@ -841,7 +867,13 @@ export function createWebServer(options = {}) {
   ]);
 
   const server = http.createServer((req, res) => {
-    if (!isRequestAllowed(req)) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    const requestHost = req.headers.host || "";
+    let matchesPort = false;
+    try { matchesPort = Number(new URL(`http://${requestHost}`).port || 80) === req.socket.localPort; }
+    catch { /* Invalid authorities are rejected along with foreign hosts. */ }
+    if (!isRequestAllowed(req) || !matchesPort) {
       sendJson(res, 403, { error: "Zugriff nur von localhost erlaubt." });
       return;
     }
@@ -856,11 +888,21 @@ export function createWebServer(options = {}) {
     const { pathname } = url;
     const route = `${req.method} ${pathname}`;
 
-    // Statische GUI-Dateien bleiben ohne Token erreichbar (siehe
-    // PUBLIC_ROUTES; Host-/Origin-Pruefung oben gilt weiterhin).
-    if (!PUBLIC_ROUTES.has(route) && !isTokenValid(req, authToken)) {
-      sendJson(res, 403, { error: "Ungueltiges oder fehlendes Token." });
+    const browserRoute = pathname.startsWith("/api/browser/");
+    const headerAccess = isTokenValid(req, authToken);
+    if (browserRoute && !isBrowserRequest(req)) {
+      sendJson(res, 403, { error: "Ungueltiger Browser-Ursprung oder fehlender Anfrageschutz." });
       return;
+    }
+    if (!PUBLIC_ROUTES.has(route) && !headerAccess) {
+      auth?.status(); // Idle expiry must revoke sessions before authorizing requests.
+      const session = browserSessions.get(req);
+      if (!session || !isBrowserRequest(req) || pathname === "/api/server/stop") {
+        sendJson(res, 403, { error: "Browser-Sitzung gesperrt. Bitte erneut entsperren.", code: "BROWSER_SESSION_REQUIRED" });
+        return;
+      }
+      const mutation = req.method === "POST" && /^\/api\/auth\/(setup|unlock|lock|update|password|delete|mode|profile)$/.test(pathname);
+      browserSessions.track(req, res, session, mutation);
     }
 
     const handler = routes.get(route);
@@ -870,10 +912,10 @@ export function createWebServer(options = {}) {
       return;
     }
 
-    Promise.resolve().then(() => handler(req, res)).catch((err) => {
+    Promise.resolve().then(() => { req.checkBrowserSession?.(); return handler(req, res); }).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, err instanceof AuthError ? err.status : 500, {
-          error: pathname.startsWith("/api/auth/") ? safeAwsError(err) : err.message,
+          error: (pathname.startsWith("/api/auth/") || browserRoute) ? safeAwsError(err) : err.message,
           ...(pathname.startsWith("/api/auth/") && getAuthDiagnostic(err) && { details: getAuthDiagnostic(err) })
         });
       } else {
@@ -886,6 +928,7 @@ export function createWebServer(options = {}) {
   // uebergebene Basis-Client wird vom Aufrufer verwaltet und hier nicht zerstoert.
   server.on("close", () => {
     auth?.off("change", onAuthChange);
+    browserSessions.revokeAll();
     for (const regionalClient of regionalClients.values()) {
       regionalClient?.destroy?.();
     }

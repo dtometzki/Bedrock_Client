@@ -1,6 +1,6 @@
 {
   "name": "bedrock-client",
-  "version": "1.12.6",
+  "version": "1.13.0",
   "description": "Interactive AWS Bedrock CLI client (Native ESM)",
   "type": "module",
   "author": "Damian Tometzki",
@@ -35,7 +35,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check app_aws.js && node --check src/*.js && node --check src/web/app.js && node --check test/*.js",
+    "check": "node --check app_aws.js && node --check src/*.js && node --check src/web/*.js && node --check test/*.js",
     "lint": "eslint .",
     "test": "npm run check && node --test"
   },

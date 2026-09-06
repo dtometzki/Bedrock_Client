@@ -641,7 +641,7 @@ export async function main() {
     if (cliArgs.background) {
       const started = await launchWebBackground();
       console.log(`${ANSI.green}Web-GUI im Hintergrund:${ANSI.reset} ${sanitizeTerminalText(started.url)}`);
-      if (!started.opened) console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${sanitizeTerminalText(started.launchTarget)}`);
+      if (!started.opened) console.log(`${ANSI.green}${started.launchTarget === started.url ? "Im Browser öffnen" : "Sichere Startdatei"}:${ANSI.reset} ${sanitizeTerminalText(started.launchTarget)}`);
       console.log(`Beenden mit: ${backgroundStopCommand()}`);
       return;
     }
@@ -786,7 +786,7 @@ export async function main() {
       let bootstrap = null;
       try {
         if (background) registration = registerBackgroundServer({ port: Number(new URL(url).port), token: authToken });
-        bootstrap = authToken ? createBrowserBootstrap(url, authToken) : null;
+        bootstrap = authToken && !(auth.mode === "vault" && auth.status().exists) ? createBrowserBootstrap(url, authToken) : null;
       } catch (err) {
         try { registration?.cleanup(); } finally { server.close(); }
         throw err;
@@ -808,7 +808,7 @@ export async function main() {
       const launchTarget = bootstrap?.path || url;
       let opened = false;
       if (cliArgs.noOpen) {
-        console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${launchTarget}`);
+        console.log(`${ANSI.green}${bootstrap ? "Sichere Startdatei" : "Im Browser öffnen"}:${ANSI.reset} ${launchTarget}`);
       } else {
         opened = openInBrowser(launchTarget);
         if (opened && bootstrap) {
@@ -817,7 +817,7 @@ export async function main() {
           setTimeout(cleanupBootstrap, 30_000).unref();
         } else if (!opened) {
           console.log(`${ANSI.yellow}Browser konnte nicht geoeffnet werden.${ANSI.reset}`);
-          console.log(`${ANSI.green}Sichere Startdatei:${ANSI.reset} ${launchTarget}`);
+          console.log(`${ANSI.green}${bootstrap ? "Sichere Startdatei" : "Im Browser öffnen"}:${ANSI.reset} ${launchTarget}`);
         }
       }
       console.log(`${ANSI.gray}Beenden mit Ctrl+C.${ANSI.reset}`);

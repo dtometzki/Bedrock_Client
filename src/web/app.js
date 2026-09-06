@@ -1,47 +1,11 @@
+import { initBrowserSession } from "./browser-session.js";
 import { initAuthForm } from "./auth-form.js";
 import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./auth-display.js";
 
 (() => {
   "use strict";
 
-  // Der Server erwartet bei aktiviertem Auth-Token dessen Wert in jedem
-  // API-Request. Die Seite wird beim ersten Aufruf mit #token=... geladen;
-  // danach lebt das Token nur noch in sessionStorage (uebersteht Reloads,
-  // endet mit dem Tab) und wird als Header bei jedem fetch mitgesendet.
-  const TOKEN_STORAGE_KEY = "bedrock-chat-token";
-  const fragmentToken = new URLSearchParams(location.hash.replace(/^#/, "")).get("token") || "";
-  // Query-Token nur noch fuer alte Links akzeptieren. Neue Starts verwenden
-  // das Fragment, das bei der HTTP-Anfrage nicht an den Server gesendet wird.
-  const queryToken = new URLSearchParams(location.search).get("token") || "";
-  const urlToken = fragmentToken || queryToken;
-  let storedToken = "";
-  try {
-    if (urlToken) {
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, urlToken);
-    } else {
-      storedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || "";
-    }
-  } catch {
-    // sessionStorage nicht verfuegbar (z. B. blockiert): Nur URL-Token nutzen,
-    // ein Reload ohne ?token= verliert dann die API-Berechtigung.
-  }
-  const AUTH_TOKEN = urlToken || storedToken;
-
-  // Token aus der Adresszeile entfernen, damit es nicht in der Browser-History
-  // oder in kopierten Links landet. Reloads funktionieren ueber sessionStorage,
-  // die Index-Seite selbst ist serverseitig ohne Token erreichbar.
-  if (urlToken && window.history?.replaceState) {
-    const cleanUrl = new URL(location.href);
-    cleanUrl.searchParams.delete("token");
-    cleanUrl.hash = "";
-    window.history.replaceState(null, "", cleanUrl.toString());
-  }
-
-  function apiFetch(url, options = {}) {
-    const headers = { ...(options.headers || {}) };
-    if (AUTH_TOKEN) headers["x-bedrock-token"] = AUTH_TOKEN;
-    return fetch(url, { ...options, headers });
-  }
+  const apiFetch = (url, options) => browserAccess.fetch(url, options);
 
   const el = {
     messages: document.getElementById("messages"),
@@ -184,6 +148,8 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
   }
 
   async function addFiles(fileList) {
+    if (!authReady) return;
+    const epoch = browserAccess.generation();
     if (busy) {
       alert("Während einer laufenden Anfrage können keine Anhänge hinzugefügt werden.");
       return;
@@ -199,6 +165,7 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
       }
       try {
         const dataBase64 = await readFileAsBase64(file);
+        if (epoch !== browserAccess.generation()) return;
         pendingAttachments.push({ name: file.name, dataBase64 });
       } catch (err) {
         alert(err.message);
@@ -290,7 +257,9 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
 
   async function loadState() {
     const response = await apiFetch("/api/state");
-    applyState(await response.json());
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Status konnte nicht geladen werden.");
+    applyState(data);
   }
 
   async function postJson(url, payload) {
@@ -306,6 +275,7 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
 
   async function sendMessage() {
     if (!authReady) { await openAuth(); return; }
+    const epoch = browserAccess.generation();
     const text = el.input.value.trim();
     if ((!text && !pendingAttachments.length) || busy) return;
 
@@ -336,6 +306,7 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
     };
 
     const handleEvent = (event) => {
+      if (epoch !== browserAccess.generation()) return;
       if (event.type === "text") {
         answer += event.text;
         renderAnswer();
@@ -404,6 +375,7 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
       content.parentNode.appendChild(box);
     }
 
+    if (epoch !== browserAccess.generation()) return;
     cursor.remove();
     content.innerHTML = renderMarkdown(answer);
 
@@ -700,7 +672,7 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
     const response = await apiFetch(`/api/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: encoded });
     const result = await response.json();
     if (!response.ok) throw new Error(action === "check" && result.details ? "AWS-Verbindungsprüfung fehlgeschlagen. Siehe Details unten." : result.error || "AWS-Einstellung fehlgeschlagen.");
-    applyAuthState(result);
+    if (browserAccess.isReady()) applyAuthState(result);
   }
   async function refreshAuth() {
     const response = await apiFetch("/api/auth/status");
@@ -764,8 +736,35 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
   }, { passive: true });
   setInterval(() => refreshAuth().catch(() => {}), 5000);
 
-  loadState().then(() => { if (authState?.mode === "vault" && authState.locked) return openAuth(); }).catch((err) => {
-    el.status.textContent = "Status konnte nicht geladen werden: " + err.message;
+  const browserAccess = initBrowserSession({
+    onLock: () => {
+      authReady = false;
+      authState = null;
+      setBusy(false);
+      currentSystemPrompt = "";
+      pendingAttachments = [];
+      el.messages.querySelectorAll(".msg").forEach((node) => node.remove());
+      el.input.value = "";
+      el.fileInput.value = "";
+      renderAttachRow();
+      el.modelSelect.replaceChildren();
+      el.effortSelect.replaceChildren();
+      el.accountChip.textContent = "–";
+      el.status.textContent = "Browser-Sitzung gesperrt.";
+      el.usageOverlay.style.display = "none";
+      el.usageBody.replaceChildren();
+      authProfiles = { profiles: [], roleProfiles: [] };
+      for (const id of ["authSummary", "authStatus", "authErrorText", "authFeedback", "authProfileHint", "authActiveHint"]) authEl(id).textContent = "";
+      authEl("authProfile").replaceChildren();
+      clearAuthInputs();
+      authDialog.close();
+    },
+    onUnlock: async () => {
+      await loadState();
+      el.status.textContent = "";
+      if (authState?.mode === "vault" && authState.locked) await openAuth();
+    }
   });
+  browserAccess.start().catch((err) => { el.status.textContent = err.message; });
   el.input.focus();
 })();
