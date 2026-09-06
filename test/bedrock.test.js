@@ -25,40 +25,53 @@ function streamFrom(events) {
   })();
 }
 
-test("bundled Fable 5.1 produces supported Converse requests and preserves Fable 5", async () => {
-  const models = loadModels(new URL("../models.json", import.meta.url));
-  const model = findModel(models, "claude-fable-5-1");
-  assert.ok(model);
-  assert.equal(getModelInvocationId(model), "us.anthropic.claude-fable-5-1");
-  assert.equal(regionForModelId(getModelInvocationId(model), "eu-central-1"), "us-east-1");
-  assert.equal(findModel(models, "claude-fable-5").id, "us.anthropic.claude-fable-5");
-  assert.equal(resolveEffortLevel(model), "high");
-  assert.equal(getModelPricing(model).input, 10);
-  assert.equal(getModelPricing(model).output, 50);
-
-  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
-    let sentCommand;
-    const client = {
-      async send(command) {
-        sentCommand = command;
-        return { stream: streamFrom([{ contentBlockDelta: { delta: { text: "ok" } } }]) };
-      }
-    };
-    for await (const event of streamConverse(client, {
-      modelId: getModelInvocationId(model),
-      messages: [{ role: "user", content: [{ text: "Hello" }] }],
-      inferenceConfig: buildInferenceConfig(model, { temperature: 0.4, topP: 0.5, maxTokens: 100 }),
-      additionalModelRequestFields: buildAdaptiveThinkingFields(resolveEffortLevel(model, effort), normalizeEffort(model).style)
-    })) {
-      void event;
-    }
-    assert.equal(sentCommand.input.modelId, "us.anthropic.claude-fable-5-1");
-    assert.deepEqual(sentCommand.input.inferenceConfig, { maxTokens: 100 });
-    assert.deepEqual(sentCommand.input.additionalModelRequestFields, {
-      thinking: { type: "adaptive" }, output_config: { effort }
-    });
+for (const { label, id, previousLabel, previousId, input, output } of [
+  {
+    label: "claude-fable-5-1", id: "us.anthropic.claude-fable-5-1",
+    previousLabel: "claude-fable-5", previousId: "us.anthropic.claude-fable-5",
+    input: 10, output: 50
+  },
+  {
+    label: "claude-opus-5", id: "us.anthropic.claude-opus-5",
+    previousLabel: "claude-opus-4-8", previousId: "global.anthropic.claude-opus-4-8",
+    input: 5, output: 25
   }
-});
+]) {
+  test(`bundled ${label} produces supported Converse requests and preserves ${previousLabel}`, async () => {
+    const models = loadModels(new URL("../models.json", import.meta.url));
+    const model = findModel(models, label);
+    assert.ok(model);
+    assert.equal(getModelInvocationId(model), id);
+    assert.equal(regionForModelId(getModelInvocationId(model), "eu-central-1"), "us-east-1");
+    assert.equal(findModel(models, previousLabel).id, previousId);
+    assert.equal(resolveEffortLevel(model), "high");
+    assert.equal(getModelPricing(model).input, input);
+    assert.equal(getModelPricing(model).output, output);
+
+    for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+      let sentCommand;
+      const client = {
+        async send(command) {
+          sentCommand = command;
+          return { stream: streamFrom([{ contentBlockDelta: { delta: { text: "ok" } } }]) };
+        }
+      };
+      for await (const event of streamConverse(client, {
+        modelId: getModelInvocationId(model),
+        messages: [{ role: "user", content: [{ text: "Hello" }] }],
+        inferenceConfig: buildInferenceConfig(model, { temperature: 0.4, topP: 0.5, maxTokens: 100 }),
+        additionalModelRequestFields: buildAdaptiveThinkingFields(resolveEffortLevel(model, effort), normalizeEffort(model).style)
+      })) {
+        void event;
+      }
+      assert.equal(sentCommand.input.modelId, id);
+      assert.deepEqual(sentCommand.input.inferenceConfig, { maxTokens: 100 });
+      assert.deepEqual(sentCommand.input.additionalModelRequestFields, {
+        thinking: { type: "adaptive" }, output_config: { effort }
+      });
+    }
+  });
+}
 
 test("buildInferenceConfig merges defaults, model config and CLI overrides", () => {
   assert.deepEqual(buildInferenceConfig({
