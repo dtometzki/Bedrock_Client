@@ -28,7 +28,7 @@ async function fixture(t, { setup = true, serverOptions = {} } = {}) {
     fs.rmSync(directory, { recursive: true, force: true });
   });
   const headers = (cookie = "") => ({ "x-bedrock-request": "1", Origin: server.url,
-    "Content-Type": "application/json", Cookie: cookie });
+    "Content-Type": "application/json", "x-bedrock-chat": "00000000-0000-4000-8000-000000000001", Cookie: cookie });
   async function request(route, body, cookie = "", extraHeaders = {}) {
     const res = await fetch(server.url + route, { method: body === undefined ? "GET" : "POST",
       headers: { ...headers(cookie), ...extraHeaders }, ...(body !== undefined && { body: JSON.stringify(body) }) });
@@ -166,7 +166,8 @@ test("lock aborts a cookie-authenticated stream and prevents a pending request b
   await f.request("/api/auth/lock", {}, current.cookie);
   connected.end('"}');
   await pending;
-  assert.equal(f.getState().systemPrompt, "");
+  const afterLock = await f.login();
+  assert.equal((await f.request("/api/state", undefined, afterLock.cookie)).data.systemPrompt, "");
 });
 
 

@@ -4,8 +4,14 @@ import { ensureConfigDir, getConfigDir, writeFileAtomic } from "./config.js";
 
 const SESSION_VERSION = 1;
 
-export function getSessionPath() {
-  return path.join(getConfigDir(), "last-session.json");
+export function isValidChatId(value) {
+  return typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
+}
+
+export function getSessionPath({ chatId = null } = {}) {
+  if (chatId === null) return path.join(getConfigDir(), "last-session.json");
+  if (!isValidChatId(chatId)) throw new Error("Ungueltige Chat-ID.");
+  return path.join(getConfigDir(), "web-chats", `${chatId}.json`);
 }
 
 function isValidMessage(message) {
@@ -19,9 +25,9 @@ function isValidMessage(message) {
     ));
 }
 
-export function readSession() {
+export function readSession({ chatId = null } = {}) {
   try {
-    const raw = fs.readFileSync(getSessionPath(), "utf8");
+    const raw = fs.readFileSync(getSessionPath({ chatId }), "utf8");
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.messages) ? parsed.messages.filter(isValidMessage) : [];
     return {
@@ -34,10 +40,12 @@ export function readSession() {
   }
 }
 
-export function writeSession(messages, { modelId = null } = {}) {
+export function writeSession(messages, { modelId = null, chatId = null } = {}) {
   try {
     const valid = Array.isArray(messages) ? messages.filter(isValidMessage) : [];
+    const file = getSessionPath({ chatId });
     ensureConfigDir();
+    if (chatId) fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const payload = {
       version: SESSION_VERSION,
       savedAt: new Date().toISOString(),
@@ -47,16 +55,16 @@ export function writeSession(messages, { modelId = null } = {}) {
     // Atomar schreiben: die Session-Datei wird nach jedem Turn komplett neu
     // geschrieben – ein Abbruch mittendrin wuerde sonst den gesamten Verlauf
     // unbrauchbar machen (readSession faengt den JSON-Fehler still ab).
-    writeFileAtomic(getSessionPath(), `${JSON.stringify(payload, null, 2)}\n`);
+    writeFileAtomic(file, `${JSON.stringify(payload, null, 2)}\n`);
     return true;
   } catch {
     return false;
   }
 }
 
-export function clearSession() {
+export function clearSession({ chatId = null } = {}) {
   try {
-    fs.rmSync(getSessionPath(), { force: true });
+    fs.rmSync(getSessionPath({ chatId }), { force: true });
     return true;
   } catch {
     return false;

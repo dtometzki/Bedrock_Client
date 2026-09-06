@@ -1,3 +1,4 @@
+import { windowChatId } from "./window-chat.js";
 import { initBrowserSession } from "./browser-session.js";
 import { initAuthForm } from "./auth-form.js";
 import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./auth-display.js";
@@ -5,7 +6,10 @@ import { authModeExplanation, formatAuthSummary, formatAuthDiagnostic } from "./
 (() => {
   "use strict";
 
-  const apiFetch = (url, options) => browserAccess.fetch(url, options);
+  const chatId = windowChatId();
+  const apiFetch = (url, options = {}) => browserAccess.fetch(url, {
+    ...options, headers: { ...options.headers, "x-bedrock-chat": chatId }
+  });
 
   const el = {
     messages: document.getElementById("messages"),
